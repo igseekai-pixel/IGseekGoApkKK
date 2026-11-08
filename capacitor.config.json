@@ -3,7 +3,7 @@
   "appName": "IGseek",
   "webDir": "dist",
   "server": {
-    "url": "https://igseekai.lovable.app",
+    "url": "https://remix-igseek-1821.ai.studio",
     "cleartext": false,
     "androidScheme": "https"
   },

@@ -13,7 +13,7 @@ class MainActivity : AppCompatActivity() {
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
 
     // Target web app URL
-    private val TARGET_URL = "https://igseek-1821.ai.studio"
+    private val TARGET_URL = "https://remix-igseek-1821.ai.studio"
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
