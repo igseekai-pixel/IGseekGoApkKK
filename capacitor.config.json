@@ -1,0 +1,14 @@
+{
+  "appId": "app.igseek.mobile",
+  "appName": "IGseek",
+  "webDir": "dist",
+  "server": {
+    "url": "https://igseekai.lovable.app",
+    "cleartext": false,
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#000000"
+  }
+}

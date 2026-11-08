@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en" class="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IGseek — AI copilot for creators & builders</title>
+    <meta name="description" content="IGseek — специализированные AI-агенты, reasoning-режим и артефакты кода в одном чате. Красно-чёрный минимализм, скорость и глубина." />
+    <meta property="og:title" content="IGseek — AI copilot for creators & builders" />
+    <meta property="og:description" content="IGseek — специализированные AI-агенты, reasoning-режим и артефакты кода в одном чате. Красно-чёрный минимализм, скорость и глубина." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Instrument+Serif:ital@0;1&family=Urbanist:wght@600;700&display=swap" />
+    <link rel="stylesheet" href="https://db.onlinewebfonts.com/c/d08bafd725a4cfc309efb5a88e0b63a5?family=basis33" />
+    <script>
+      (function() {
+        try {
+          var t = localStorage.getItem('igseek:theme') || 'light';
+          var doc = document.documentElement;
+          if (t === 'dark') {
+            doc.classList.add('dark');
+            doc.classList.remove('light');
+          } else {
+            doc.classList.add('light');
+            doc.classList.remove('dark');
+          }
+          doc.style.colorScheme = t;
+          var a = localStorage.getItem('igseek:accent') || 'default';
+          var presets = {
+            default: { dark: '#ef4444', light: '#18181b', filter: 'none', soft: 'rgba(239, 68, 68, 0.15)', border: 'rgba(239, 68, 68, 0.35)', activeBg: '#381016', bubbleBg: '#3a131a', shadow: '0 0 16px rgba(239, 68, 68, 0.28)', glow: 'rgba(239, 68, 68, 0.45)' },
+            red: { dark: '#ef4444', light: '#dc2626', filter: 'none', soft: 'rgba(239, 68, 68, 0.15)', border: 'rgba(239, 68, 68, 0.35)', activeBg: '#381016', bubbleBg: '#3a131a', shadow: '0 0 16px rgba(239, 68, 68, 0.28)', glow: 'rgba(239, 68, 68, 0.45)' },
+            orange: { dark: '#f97316', light: '#ea580c', filter: 'hue-rotate(28deg) saturate(1.35) brightness(1.05)', soft: 'rgba(249, 115, 22, 0.16)', border: 'rgba(249, 115, 22, 0.38)', activeBg: '#3a1c0d', bubbleBg: '#3d2011', shadow: '0 0 16px rgba(249, 115, 22, 0.32)', glow: 'rgba(249, 115, 22, 0.48)' },
+            black: { dark: '#71717a', light: '#18181b', filter: 'grayscale(1) brightness(0.75)', soft: 'rgba(113, 113, 122, 0.15)', border: 'rgba(113, 113, 122, 0.35)', activeBg: '#27272a', bubbleBg: '#27272a', shadow: '0 0 16px rgba(113, 113, 122, 0.28)', glow: 'rgba(113, 113, 122, 0.45)' },
+            emerald: { dark: '#10b981', light: '#059669', filter: 'hue-rotate(130deg) saturate(1.2) brightness(0.95)', soft: 'rgba(16, 185, 129, 0.15)', border: 'rgba(16, 185, 129, 0.35)', activeBg: '#0b2e20', bubbleBg: '#0d3424', shadow: '0 0 16px rgba(16, 185, 129, 0.28)', glow: 'rgba(16, 185, 129, 0.45)' },
+            blue: { dark: '#3b82f6', light: '#2563eb', filter: 'hue-rotate(215deg) saturate(1.3) brightness(1.05)', soft: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.35)', activeBg: '#0f2240', bubbleBg: '#112749', shadow: '0 0 16px rgba(59, 130, 246, 0.28)', glow: 'rgba(59, 130, 246, 0.45)' },
+            purple: { dark: '#8b5cf6', light: '#7c3aed', filter: 'hue-rotate(260deg) saturate(1.4) brightness(1.1)', soft: 'rgba(139, 92, 246, 0.15)', border: 'rgba(139, 92, 246, 0.35)', activeBg: '#231238', bubbleBg: '#291642', shadow: '0 0 16px rgba(139, 92, 246, 0.28)', glow: 'rgba(139, 92, 246, 0.45)' },
+            pink: { dark: '#ec4899', light: '#db2777', filter: 'hue-rotate(320deg) saturate(1.3) brightness(1.05)', soft: 'rgba(236, 72, 153, 0.15)', border: 'rgba(236, 72, 153, 0.35)', activeBg: '#390f23', bubbleBg: '#421229', shadow: '0 0 16px rgba(236, 72, 153, 0.28)', glow: 'rgba(236, 72, 153, 0.45)' },
+            amber: { dark: '#f59e0b', light: '#d97706', filter: 'hue-rotate(42deg) saturate(1.5) brightness(1.1)', soft: 'rgba(245, 158, 11, 0.15)', border: 'rgba(245, 158, 11, 0.35)', activeBg: '#362106', bubbleBg: '#3d2608', shadow: '0 0 16px rgba(245, 158, 11, 0.28)', glow: 'rgba(245, 158, 11, 0.45)' }
+          };
+          var p = presets[a] || presets.default;
+          var isLight = t === 'light';
+          var color = isLight ? (a === 'default' ? '#18181b' : p.light) : p.dark;
+          var soft = isLight ? 'rgba(24, 24, 27, 0.08)' : p.soft;
+          var border = isLight ? 'rgba(24, 24, 27, 0.18)' : p.border;
+          var activeBg = isLight ? '#18181b' : p.activeBg;
+          var bubbleBg = isLight ? '#18181b' : p.bubbleBg;
+          var shadow = isLight ? '0 4px 12px rgba(0, 0, 0, 0.1)' : p.shadow;
+          var glow = isLight ? 'rgba(0, 0, 0, 0.15)' : p.glow;
+          var logoFilter = isLight ? 'brightness(0)' : p.filter;
+          doc.style.setProperty('--brand', color);
+          doc.style.setProperty('--brand-glow', color);
+          doc.style.setProperty('--brand-soft', soft);
+          doc.style.setProperty('--brand-border', border);
+          doc.style.setProperty('--brand-active-bg', activeBg);
+          doc.style.setProperty('--brand-bubble-bg', bubbleBg);
+          doc.style.setProperty('--brand-shadow', shadow);
+          doc.style.setProperty('--brand-glow-shadow', glow);
+          doc.style.setProperty('--logo-filter', logoFilter);
+          doc.style.setProperty('--primary', color);
+          doc.style.setProperty('--ring', color);
+        } catch(e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-background text-foreground antialiased selection:bg-brand selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

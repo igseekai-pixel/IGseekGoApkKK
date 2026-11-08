@@ -1,0 +1,130 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with settings, plan information, and preferences.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique Firebase Auth user ID." },
+        "displayName": { "type": "string", "maxLength": 100, "description": "User display name." },
+        "email": { "type": "string", "maxLength": 200, "description": "User email address." },
+        "theme": { "type": "string", "enum": ["dark", "light", "crimson"], "description": "Theme preference." },
+        "lang": { "type": "string", "enum": ["en", "ru", "es", "fr", "ar"], "description": "Language preference." },
+        "model": { "type": "string", "enum": ["instinct", "chat", "f1"], "description": "Selected model." },
+        "agent": { "type": "string", "enum": ["universal", "coder", "hacker", "mentor", "psy", "creative"], "description": "Selected agent personality." },
+        "plan": { "type": "string", "enum": ["free", "pro"], "description": "Subscription plan." },
+        "proLifetime": { "type": "boolean", "description": "Whether user was granted lifetime Pro." },
+        "signupNumber": { "type": "number", "description": "Sequential signup number." },
+        "deviceFingerprint": { "type": "string", "maxLength": 128, "description": "Unique device fingerprint." },
+        "createdAt": { "type": "string", "description": "ISO timestamp of creation." },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last update." }
+      },
+      "required": ["id", "plan"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A conversation thread belonging to a user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique chat document ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "title": { "type": "string", "maxLength": 200, "description": "Chat title." },
+        "isSaved": { "type": "boolean", "description": "Whether chat is bookmarked/saved." },
+        "projectId": { "type": "string", "description": "Optional associated project ID." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Last message timestamp." }
+      },
+      "required": ["userId", "title"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "An individual message within a chat.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique message ID." },
+        "chatId": { "type": "string", "description": "Parent chat ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "role": { "type": "string", "enum": ["user", "assistant"], "description": "Message author role." },
+        "content": { "type": "string", "maxLength": 16000000, "description": "Message text or markdown content." },
+        "reasoning": { "type": "string", "maxLength": 1000000, "description": "Deep reasoning or thought process." },
+        "position": { "type": "number", "description": "Order position of message." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." }
+      },
+      "required": ["chatId", "userId", "role", "content", "position"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "A project folder to organize chats.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique project ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "name": { "type": "string", "maxLength": 100, "description": "Project name." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Update timestamp." }
+      },
+      "required": ["userId", "name"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "A payment or donation record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique payment ID." },
+        "userId": { "type": "string", "description": "Purchaser user ID." },
+        "providerTxnId": { "type": "string", "maxLength": 128, "description": "Transaction ID from payment provider." },
+        "amount": { "type": "number", "description": "Payment amount." },
+        "currency": { "type": "string", "maxLength": 10, "description": "Currency code." },
+        "status": { "type": "string", "enum": ["PENDING", "CONFIRMED", "CANCELED", "CHARGEBACKED"], "description": "Transaction status." },
+        "purpose": { "type": "string", "maxLength": 50, "description": "Subscription pro or donation." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Update timestamp." }
+      },
+      "required": ["userId", "providerTxnId", "amount", "status"]
+    },
+    "Memory": {
+      "title": "Memory",
+      "description": "Long-term semantic memory item for the user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique memory item ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "content": { "type": "string", "maxLength": 1000, "description": "Learned user preference or fact." },
+        "kind": { "type": "string", "maxLength": 50, "description": "Category of memory." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Update timestamp." }
+      },
+      "required": ["userId", "content", "kind"]
+    }
+  },
+  "firestore": {
+    "/profiles/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile documents keyed by Auth UID."
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Conversations owned by users."
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Messages inside a conversation subcollection."
+    },
+    "/chat_messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Messages inside a conversation top-level collection."
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Project folders owned by users."
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Audit trail of payments."
+    },
+    "/memories/{memoryId}": {
+      "schema": "Memory",
+      "description": "User long-term memory facts."
+    }
+  }
+}

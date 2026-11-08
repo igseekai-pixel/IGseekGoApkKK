@@ -1,0 +1,8 @@
+{
+  "name": "Remix IGseek",
+  "description": "Discover and explore trending content, profiles, and hashtags on Instagram through an intuitive, streamlined search interface.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

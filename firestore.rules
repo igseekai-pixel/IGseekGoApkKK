@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+    }
+
+    function isIncomingOwner() {
+      return isSignedIn() && (
+        (('user_id' in request.resource.data) && request.resource.data.user_id == request.auth.uid) ||
+        (('userId' in request.resource.data) && request.resource.data.userId == request.auth.uid)
+      );
+    }
+
+    // Profiles: /profiles/{userId}
+    match /profiles/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId);
+      allow delete: if false;
+    }
+
+    // Chats: /chats/{chatId}
+    match /chats/{chatId} {
+      allow get, delete: if isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isIncomingOwner();
+      allow update: if isDocOwner();
+
+      // Subcollection messages: /chats/{chatId}/messages/{messageId}
+      match /messages/{messageId} {
+        allow get, list, delete: if isDocOwner() || (
+          get(/databases/$(database)/documents/chats/$(chatId)).data.user_id == request.auth.uid ||
+          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
+        );
+        allow create: if isSignedIn() && (
+          isIncomingOwner() ||
+          get(/databases/$(database)/documents/chats/$(chatId)).data.user_id == request.auth.uid ||
+          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
+        );
+        allow update: if isDocOwner();
+      }
+    }
+
+    // Chat messages top-level collection: /chat_messages/{messageId}
+    match /chat_messages/{messageId} {
+      allow get, delete: if isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isIncomingOwner();
+      allow update: if isDocOwner();
+    }
+
+    // Projects: /projects/{projectId}
+    match /projects/{projectId} {
+      allow get, delete: if isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isIncomingOwner();
+      allow update: if isDocOwner();
+    }
+
+    // Memories: /memories/{memoryId}
+    match /memories/{memoryId} {
+      allow get, delete: if isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isIncomingOwner();
+      allow update: if isDocOwner();
+    }
+
+    // Payments: /payments/{paymentId}
+    match /payments/{paymentId} {
+      allow get: if isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isIncomingOwner();
+      allow update, delete: if false;
+    }
+  }
+}
