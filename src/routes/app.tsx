@@ -1,15 +1,51 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { makeT, localeFor, type LangCode as I18nLang } from "@/lib/i18n";
+import { makeT, localeFor, readStoredLang, syncDocumentLang, useLang, type LangCode as I18nLang } from "@/lib/i18n";
 
-import { firebaseClient as supabase } from "@/lib/firebase-service";
+import { firebaseClient as supabase, waitForAuthProfileSetup } from "@/lib/firebase-service";
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 import { lovable } from "@/integrations/lovable";
 import { AuthCard } from "@/components/auth/AuthCard";
-import { useTheme, useAccent, ACCENT_PRESETS } from "@/lib/theme";
+import { PRIVACY_POLICY_URL, USER_AGREEMENT_URL } from "@/lib/legal";
+import { useTheme, useAccent, applyAccent, ACCENT_PRESETS, type AccentId } from "@/lib/theme";
+import {
+  readFlowLibraryFiles,
+  upsertFlowLibraryFiles,
+  renameStoredFlowLibraryFile,
+  deleteStoredFlowLibraryFile,
+  replaceFlowLibraryFilesFromCloud,
+} from "@/lib/flow-library-store";
+import {
+  ensureAccountScope,
+  clearLocalUserCaches,
+  listCloudEngineProjectIds,
+  loadCloudEngineProject,
+  saveCloudEngineProject,
+  deleteCloudEngineProject,
+  subscribeCloudLibraryFiles,
+  fetchCloudChatMessagesForLibrary,
+  renameCloudChatMediaItem,
+  deleteCloudChatMediaItem,
+  type CloudChatMessageForLibrary,
+} from "@/lib/cloud-sync";
 import { toast } from "sonner";
+import {
+  PROMPT_LIMITS,
+  type PromptReceipt,
+  canUsePrompt,
+  consumePrompt,
+  ensureScopeResetTimestamp,
+  formatRemainingReset,
+  isWithinCancelRefundWindow,
+  markScopeExhausted,
+  readPromptSnapshot,
+  refundPrompt,
+  syncPromptUsageFromCloud,
+  usePromptLimits,
+} from "@/lib/prompt-limits";
+import { getDeviceFingerprint } from "@/lib/device-fingerprint";
 
 
 const TContext = createContext<(k: string) => string>((k) => k);
@@ -31,6 +67,7 @@ import {
   Bookmark,
   Library,
   ChevronDown,
+  ChevronLeft,
   Menu,
   Globe,
   Flame,
@@ -76,6 +113,12 @@ import {
   Smartphone,
   ExternalLink,
   AlertTriangle,
+  Workflow,
+  AudioLines,
+  PhoneCall,
+  Radio,
+  Volume2,
+  Palette,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -88,14 +131,23 @@ import logoAsset from "@/assets/igseek-logo.png";
 import { getCachedCalendarToken, createCalendarEvent, saveLocalReminder, type CalendarEventPayload } from "@/lib/google-calendar";
 import { getCachedTasksToken, createGoogleTask, saveLocalTask } from "@/lib/google-tasks";
 import { getCachedGmailToken, sendGmailMessage, saveLocalEmail, connectGmail } from "@/lib/gmail";
+import { FlowView } from "@/components/flow/FlowView";
+import { LimitCooldownCard, type LimitCooldownPayload } from "@/components/ui/LimitCooldownCard";
+import {
+  LongTextButton,
+  LongTextModal,
+  countTextLines,
+  isLongTextOverLimit,
+  stripAttachmentsForLineCount,
+} from "@/components/ui/LongTextModal";
 
 export const Route = createFileRoute("/app")({
   head: () => ({
     meta: [
       { title: "IGseek App — AI chat" },
-      { name: "description", content: "Рабочее пространство IGseek: AI-чат, проекты, память и артефакты." },
+      { name: "description", content: "IGseek workspace: AI chat, projects, memory, and artifacts." },
       { property: "og:title", content: "IGseek App — AI chat" },
-      { property: "og:description", content: "Рабочее пространство IGseek: AI-чат, проекты, память и артефакты." },
+      { property: "og:description", content: "IGseek workspace: AI chat, projects, memory, and artifacts." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -103,7 +155,7 @@ export const Route = createFileRoute("/app")({
   component: Index,
 });
 
-type TabId = "chat" | "library" | "saved" | "engine" | "docs";
+type TabId = "chat" | "flow" | "library" | "saved" | "engine" | "wave" | "docs";
 
 const suggestions = [
   { icon: TrendingUp, label: "Analyze trends", hint: "in your niche this week", tag: "Trends" },
@@ -112,11 +164,13 @@ const suggestions = [
   { icon: ImageIcon, label: "Weekly plan", hint: "across formats and channels", tag: "Content" },
 ];
 
-const navPrimary: { id: TabId; icon: typeof MessageSquare; label: string }[] = [
+const navPrimary: { id: TabId; icon: typeof MessageSquare; label: string; soon?: boolean }[] = [
   { id: "chat", icon: MessageSquare, label: "Chat" },
+  { id: "flow", icon: Workflow, label: "Flow" },
   { id: "library", icon: Library, label: "Library" },
   { id: "saved", icon: Bookmark, label: "Saved" },
   { id: "engine", icon: Code2, label: "Engine" },
+  { id: "wave", icon: AudioLines, label: "Wave", soon: true },
   { id: "docs", icon: FileCode, label: "Docs" },
 ];
 
@@ -139,12 +193,12 @@ const MODELS: { id: ModelId; name: string; tag: string }[] = [
 
 type AgentId = "universal" | "coder" | "hacker" | "mentor" | "psy" | "creative";
 const AGENTS: { id: AgentId; name: string; tag: string; description: string }[] = [
-  { id: "universal", name: "Universal", tag: "Default", description: "Универсальный IGseek." },
-  { id: "coder", name: "Coder", tag: "Dev", description: "Инженер: код, архитектура, отладка." },
+  { id: "universal", name: "Universal", tag: "Default", description: "Universal IGseek assistant." },
+  { id: "coder", name: "Coder", tag: "Dev", description: "Engineer: code, architecture, debugging." },
   { id: "hacker", name: "Hacker", tag: "Red team", description: "Offsec, reverse, low-level." },
-  { id: "mentor", name: "Mentor", tag: "Teach", description: "Объясняет с примерами и слоями." },
-  { id: "psy", name: "Psy", tag: "Analyst", description: "Холодный психоанализ без сюсюканья." },
-  { id: "creative", name: "Creative", tag: "Idea", description: "Сторителлинг, тексты, концепты." },
+  { id: "mentor", name: "Mentor", tag: "Teach", description: "Explains in layers with clear examples." },
+  { id: "psy", name: "Psy", tag: "Analyst", description: "Direct psychological analysis without sugarcoating." },
+  { id: "creative", name: "Creative", tag: "Idea", description: "Storytelling, copywriting, concepts." },
 ];
 
 type Plan = "free" | "pro";
@@ -203,6 +257,14 @@ type ChatMessage = {
     attachments?: Array<{ filename: string; mimeType?: string; dataUrl?: string }>;
   }>;
   refusals?: Array<{ id?: string; action: string; reason: string; alternative: string }>;
+  tabTransitions?: Array<{
+    id?: string;
+    targetTab: "engine" | "flow" | "library" | "saved";
+    title: string;
+    reason: string;
+    suggestedPrompt?: string;
+  }>;
+  limitCooldown?: LimitCooldownPayload;
 };
 
 
@@ -304,10 +366,18 @@ function Index() {
   const [memoryPulse, setMemoryPulse] = useState(0);
   const [tab, setTab] = useState<TabId>("chat");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
+    try {
+      return typeof window !== "undefined" && window.localStorage.getItem("igseek:sidebar_v2") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [hydrated, setHydrated] = useState(false);
   const [theme, setTheme] = useTheme();
   const [accent, setAccent] = useAccent();
+  const [needsAccentOnboarding, setNeedsAccentOnboarding] = useState(false);
+  const pendingOnboardingUidRef = useRef<string | null>(null);
   const [lang, setLang] = useState<LangCode>("en");
   const [langOpen, setLangOpen] = useState(false);
   const [model, setModel] = useState<ModelId>("instinct");
@@ -330,13 +400,22 @@ function Index() {
         baseMessages: ChatMessage[];
         assistantMsg: ChatMessage;
         assistantPosition: number;
+        receipt?: PromptReceipt | null;
       }
     >
   >(new Map());
+  const activeChatReceiptRef = useRef<PromptReceipt | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const recognitionRef = useRef<any>(null);
   const [listening, setListening] = useState(false);
+  useEffect(() => {
+    return () => {
+      try {
+        recognitionRef.current?.stop();
+      } catch {}
+    };
+  }, []);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -396,15 +475,16 @@ function Index() {
     setHydrated(true);
     const savedTheme = (window.localStorage.getItem("igseek:theme") as "dark" | "light" | null) ?? "light";
     const savedLang = (window.localStorage.getItem("igseek:lang") as LangCode | null) ?? "en";
-    const savedModel = (window.localStorage.getItem("igseek:model") as ModelId | null) ?? "instinct";
+    const savedModel = (window.localStorage.getItem("igseek:model") as ModelId | null);
     const savedAgent = (window.localStorage.getItem("igseek:agent") as AgentId | null) ?? "universal";
     setTheme(savedTheme);
     setLang(savedLang);
-    setModel(savedModel);
+    syncDocumentLang(savedLang);
+    if (savedModel) setModel(savedModel);
     setAgent(savedAgent);
   }, []);
 
-  // Open HUD from inline "memory updated" chip & Gmail auth modal
+  // Open HUD from inline "memory updated" chip & Gmail auth modal & Google onboarding
   useEffect(() => {
     const onOpen = () => { setMemoryOpen(true); setMemoryPulse(0); };
     const onNav = (e: CustomEvent) => { if (e.detail) setTab(e.detail as TabId); };
@@ -412,38 +492,68 @@ function Index() {
       setPendingGmailAction(e?.detail || null);
       setGmailAuthOpen(true);
     };
+    const onAccentOnboarding = (e: Event) => {
+      const uid = (e as CustomEvent<{ uid?: string }>).detail?.uid;
+      if (uid) pendingOnboardingUidRef.current = uid;
+      setNeedsAccentOnboarding(true);
+    };
     window.addEventListener("igseek:open-memory", onOpen);
     window.addEventListener("igseek:navigate-tab" as any, onNav);
     window.addEventListener("igseek:open-gmail-auth" as any, onGmailAuth);
+    window.addEventListener("igseek:accent-onboarding-required", onAccentOnboarding);
     return () => {
       window.removeEventListener("igseek:open-memory", onOpen);
       window.removeEventListener("igseek:navigate-tab" as any, onNav);
       window.removeEventListener("igseek:open-gmail-auth" as any, onGmailAuth);
+      window.removeEventListener("igseek:accent-onboarding-required", onAccentOnboarding);
     };
   }, []);
 
-  // Desktop sidebar collapse: restore saved state, then persist changes
+  // Desktop sidebar collapse: default closed unless explicitly opened in this version
   useEffect(() => {
-    const saved = window.localStorage.getItem("igseek:sidebar");
-    if (saved === "0") setSidebarOpen(false);
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem("igseek:sidebar", sidebarOpen ? "1" : "0");
+    try {
+      window.localStorage.setItem("igseek:sidebar_v2", sidebarOpen ? "1" : "0");
+    } catch {}
   }, [sidebarOpen]);
 
 
+
+  // Real-time cloud sync for Library files created via Flow
+  useEffect(() => {
+    if (!user || isGuest || user.id === GUEST_ID) return;
+    const unsub = subscribeCloudLibraryFiles(user.id, replaceFlowLibraryFilesFromCloud);
+    return () => {
+      unsub();
+    };
+  }, [user?.id, isGuest]);
 
   // Auth: subscribe, then hydrate
   useEffect(() => {
     let cancelled = false;
 
     const loadProfile = async (authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }) => {
-      const { data: profile } = await supabase
+      ensureAccountScope(authUser.id);
+      await waitForAuthProfileSetup();
+      if (cancelled) return;
+      try {
+        window.localStorage.setItem("igseek:has_logged_in", "1");
+      } catch {}
+      let { data: profile } = await supabase
         .from("profiles")
-        .select("display_name, plan, created_at, theme, lang, model, agent")
+        .select("display_name, plan, created_at, theme, lang, model, agent, ai_style, ai_creativity, ai_length, accent, needs_accent_onboarding, defaults_v2_migrated, prompt_usage, promptUsage")
         .eq("id", authUser.id)
         .maybeSingle();
+      if (!profile && !cancelled) {
+        // Brief retry in case signUp / signInWithGoogle setDoc is mid-flight
+        await new Promise((r) => setTimeout(r, 300));
+        if (cancelled) return;
+        const retryRes = await supabase
+          .from("profiles")
+          .select("display_name, plan, created_at, theme, lang, model, agent, ai_style, ai_creativity, ai_length, accent, needs_accent_onboarding, defaults_v2_migrated, prompt_usage, promptUsage")
+          .eq("id", authUser.id)
+          .maybeSingle();
+        profile = retryRes.data;
+      }
       if (cancelled) return;
       const meta = (authUser.user_metadata ?? {}) as Record<string, string | undefined>;
       const fallbackName =
@@ -452,6 +562,20 @@ function Index() {
         meta.full_name ||
         meta.name ||
         (authUser.email ? authUser.email.split("@")[0] : "User");
+      if (!profile) {
+        void supabase.from("profiles").insert({
+          id: authUser.id,
+          display_name: fallbackName,
+          email: authUser.email ?? "",
+          theme: "light",
+          lang: "en",
+          accent: "default",
+          defaults_v2_migrated: true,
+          model: "instinct",
+          agent: "universal",
+          plan: "free",
+        });
+      }
       setUser({
         id: authUser.id,
         name: fallbackName,
@@ -459,22 +583,59 @@ function Index() {
         plan: (profile?.plan as Plan) ?? "free",
         since: profile?.created_at ?? new Date().toISOString(),
       });
+      setNeedsAccentOnboarding(
+        Boolean(profile?.needs_accent_onboarding) || pendingOnboardingUidRef.current === authUser.id,
+      );
       setAuthReady(true);
-      // Sync preferences from DB
+      // Sync preferences from DB (migrate legacy default theme/lang once to light/en)
       if (profile) {
-        const dbTheme = profile.theme === "dark" ? "dark" : "light";
-        const dbLang = profile.lang as LangCode;
+        let dbTheme: "light" | "dark" = profile.theme === "dark" ? "dark" : "light";
+        let dbLang: LangCode = (profile.lang as LangCode) || "en";
+        if (!profile.defaults_v2_migrated) {
+          dbTheme = "light";
+          dbLang = "en";
+          void supabase
+            .from("profiles")
+            .update({ theme: "light", lang: "en", defaults_v2_migrated: true, updated_at: new Date().toISOString() })
+            .eq("id", authUser.id);
+        }
         const dbModel = profile.model as ModelId;
         const dbAgent = profile.agent as AgentId;
         setTheme(dbTheme);
-        if (dbLang) setLang(dbLang);
+        setLang(dbLang);
         if (dbModel) setModel(dbModel);
         if (dbAgent) setAgent(dbAgent);
+        if (typeof profile.ai_style === "string") {
+          window.localStorage.setItem("igseek:ai_style", profile.ai_style);
+        }
+        if (typeof profile.ai_creativity === "string" && profile.ai_creativity) {
+          window.localStorage.setItem("igseek:ai_creativity", profile.ai_creativity);
+        }
+        if (typeof profile.ai_length === "string" && profile.ai_length) {
+          window.localStorage.setItem("igseek:ai_length", profile.ai_length);
+        }
+        const dbAccent = (profile.accent as AccentId | undefined) ?? "default";
+        if (ACCENT_PRESETS.some((p) => p.id === dbAccent)) {
+          setAccent(dbAccent);
+          applyAccent(dbAccent, dbTheme);
+        }
+        syncPromptUsageFromCloud(authUser.id, profile.prompt_usage || profile.promptUsage);
       }
       setPrefsHydrated(true);
-      // Load chat list and projects
+      // Load chat list, projects, and cloud Engine IDs
       void refreshChats(authUser.id);
       void refreshProjects(authUser.id);
+      void listCloudEngineProjectIds(authUser.id).then((ids) => {
+        if (cancelled || !ids.length) return;
+        setEngineChatIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.add(id));
+          try {
+            window.localStorage.setItem("igseek:engine_chat_ids", JSON.stringify(Array.from(next)));
+          } catch {}
+          return next;
+        });
+      });
     };
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
@@ -486,6 +647,14 @@ function Index() {
       // INITIAL_SESSION can briefly be null while a redirect session is being restored.
       // Only clear an established account after a real sign-out event.
       if (event === "SIGNED_OUT") {
+        clearLocalUserCaches();
+        try {
+          window.localStorage.removeItem("igseek:has_logged_in");
+        } catch {}
+        setEngineChatIds(new Set());
+        setActiveEngineChatId(null);
+        pendingOnboardingUidRef.current = null;
+        setNeedsAccentOnboarding(false);
         setUser(null);
         setChats([]);
         setProjects([]);
@@ -500,15 +669,17 @@ function Index() {
       if (data.session?.user) {
         void loadProfile(data.session.user);
       } else {
-        // Восстанавливаем локальный/быстрый аккаунт (по умолчанию Me Coder как на скриншотах)
+        pendingOnboardingUidRef.current = null;
+        setNeedsAccentOnboarding(false);
         const guest = readGuestAccount() ?? { name: "Me Coder", email: "mecoder525@gmail.com" };
         setUser({ id: GUEST_ID, name: guest.name, email: guest.email, plan: "free", since: new Date().toISOString() });
         const store = readGuestStore();
         if (store.chats.length === 0) {
-          store.chats = [{ id: "welcome-chat", title: "Прив", updated_at: new Date().toISOString(), is_saved: false, project_id: null }];
+          const tInit = makeT(readStoredLang());
+          store.chats = [{ id: "welcome-chat", title: tInit("Welcome"), updated_at: new Date().toISOString(), is_saved: false, project_id: null }];
           store.messages["welcome-chat"] = [
-            { id: "msg-1", role: "user", content: "Привет!", position: 0 },
-            { id: "msg-2", role: "assistant", content: "Привет! 👋\nЧем могу помочь?", position: 1 },
+            { id: "msg-1", role: "user", content: tInit("Hello!"), position: 0 },
+            { id: "msg-2", role: "assistant", content: tInit("Hello! 👋\nHow can I help you today?"), position: 1 },
           ];
           writeGuestStore(store);
         }
@@ -536,11 +707,25 @@ function Index() {
     setChatsLoading(true);
     const { data } = await supabase
       .from("chats")
-      .select("id, title, updated_at, is_saved, project_id")
+      .select("id, title, updated_at, is_saved, project_id, chat_type")
       .eq("user_id", id)
       .order("updated_at", { ascending: false })
       .limit(200);
-    setChats((data ?? []) as typeof chats);
+    const rows = (data ?? []) as Array<ChatRow & { chat_type?: string }>;
+    setChats(rows);
+    const cloudEngineIds = rows
+      .filter((c) => c.chat_type === "engine" || c.id.startsWith("engine-"))
+      .map((c) => c.id);
+    if (cloudEngineIds.length > 0) {
+      setEngineChatIds((prev) => {
+        const next = new Set(prev);
+        cloudEngineIds.forEach((cid) => next.add(cid));
+        try {
+          window.localStorage.setItem("igseek:engine_chat_ids", JSON.stringify(Array.from(next)));
+        } catch {}
+        return next;
+      });
+    }
     setChatsLoading(false);
   };
 
@@ -578,16 +763,17 @@ function Index() {
       writeGuestStore(store);
       return;
     }
-    await supabase.from("chats").update({ project_id: projectId }).eq("id", chatId);
+    await supabase.from("chats").update({ project_id: projectId, updated_at: new Date().toISOString() }).eq("id", chatId);
   };
 
   const createProject = async (name: string): Promise<ProjectRow | null> => {
     const clean = name.trim().slice(0, 80) || "Untitled project";
+    const now = new Date().toISOString();
     if (isGuest || user?.id === GUEST_ID) {
       const p: ProjectRow = {
         id: `proj-${Date.now()}`,
         name: clean,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       };
       const list = [p, ...readGuestProjects()];
       writeGuestProjects(list);
@@ -597,7 +783,7 @@ function Index() {
     if (!user) return null;
     const { data } = await supabase
       .from("projects")
-      .insert({ user_id: user.id, name: clean })
+      .insert({ user_id: user.id, name: clean, created_at: now, updated_at: now })
       .select("id, name, updated_at")
       .maybeSingle();
     if (data) setProjects((prev) => [data, ...prev]);
@@ -606,16 +792,18 @@ function Index() {
 
   const renameProject = async (projectId: string, name: string) => {
     const clean = name.trim().slice(0, 80) || "Untitled project";
-    setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, name: clean } : p)));
+    const now = new Date().toISOString();
+    setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, name: clean, updated_at: now } : p)));
     if (isGuest || user?.id === GUEST_ID) {
-      const list = readGuestProjects().map((p) => (p.id === projectId ? { ...p, name: clean } : p));
+      const list = readGuestProjects().map((p) => (p.id === projectId ? { ...p, name: clean, updated_at: now } : p));
       writeGuestProjects(list);
       return;
     }
-    await supabase.from("projects").update({ name: clean }).eq("id", projectId);
+    await supabase.from("projects").update({ name: clean, updated_at: now }).eq("id", projectId);
   };
 
   const deleteProject = async (projectId: string) => {
+    const affectedChats = chats.filter((c) => c.project_id === projectId);
     setProjects((prev) => prev.filter((p) => p.id !== projectId));
     setChats((prev) => prev.map((c) => (c.project_id === projectId ? { ...c, project_id: null } : c)));
     if (isGuest || user?.id === GUEST_ID) {
@@ -627,12 +815,15 @@ function Index() {
       return;
     }
     await supabase.from("projects").delete().eq("id", projectId);
+    for (const c of affectedChats) {
+      void supabase.from("chats").update({ project_id: null, updated_at: new Date().toISOString() }).eq("id", c.id);
+    }
   };
 
   const createEngineChatInProject = async (projectId: string) => {
     const newEngineId = `engine-${Date.now()}`;
     const project = projects.find((p) => p.id === projectId);
-    const title = project ? `${project.name} · Engine` : "Engine проект";
+    const title = project ? `${project.name} · Engine` : t("Engine project");
     const now = new Date().toISOString();
 
     markEngineChatId(newEngineId);
@@ -658,7 +849,16 @@ function Index() {
         title,
         user_id: user.id,
         project_id: projectId,
+        chat_type: "engine",
         updated_at: now,
+      });
+      void saveCloudEngineProject(user.id, {
+        id: newEngineId,
+        title,
+        projectId,
+        activeFile: "src/App.tsx",
+        files: INITIAL_ENGINE_FILES,
+        chatMessages: INITIAL_ENGINE_MESSAGES,
       });
     }
 
@@ -694,6 +894,7 @@ function Index() {
         title,
         user_id: user.id,
         project_id: projectId,
+        chat_type: "chat",
         updated_at: now,
       });
     }
@@ -713,8 +914,7 @@ function Index() {
 
   useEffect(() => {
     if (!hydrated) return;
-    document.documentElement.lang = lang;
-    document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+    syncDocumentLang(lang);
     window.localStorage.setItem("igseek:lang", lang);
     window.dispatchEvent(new Event("igseek:lang-change"));
   }, [lang, hydrated]);
@@ -734,10 +934,13 @@ function Index() {
     if (!user || !prefsHydrated || isGuest) return;
     const uid = user.id;
     const handle = setTimeout(() => {
-      void supabase.from("profiles").update({ theme, lang, model, agent }).eq("id", uid);
+      void supabase
+        .from("profiles")
+        .update({ theme, accent, lang, model, agent, updated_at: new Date().toISOString() })
+        .eq("id", uid);
     }, 400);
     return () => clearTimeout(handle);
-  }, [user, prefsHydrated, theme, lang, model, agent]);
+  }, [user, prefsHydrated, isGuest, theme, accent, lang, model, agent]);
 
 
   const requireAuth = (fn?: () => void) => {
@@ -761,6 +964,12 @@ function Index() {
       return;
     }
     await supabase.auth.signOut();
+    clearLocalUserCaches();
+    try {
+      window.localStorage.removeItem("igseek:has_logged_in");
+    } catch {}
+    setEngineChatIds(new Set());
+    setActiveEngineChatId(null);
     setUser(null);
     setProfileOpen(false);
   };
@@ -784,12 +993,28 @@ function Index() {
 
   const isAuthed = !!user;
   const isLocked = false;
+  const usageUid = user && !isGuest && user.id !== GUEST_ID ? user.id : "guest";
   const t = useMemo(() => makeT(lang), [lang]);
 
-  // Превью прикреплённых картинок: живут отдельно от текста поля
-  // (миниатюры-чипы над композером, а не base64-стена в textarea).
-  const [attachments, setAttachments] = useState<Array<{ id: string; name: string; dataUrl: string }>>([]);
+  // Единое состояние вложений композера (фото + файлы) — отображается чипами над композером.
+  type ChatAttachmentItem = {
+    id: string;
+    kind: "image" | "file";
+    name: string;
+    mimeType: string;
+    sizeLabel: string;
+    dataUrl: string;
+    parsedContent?: string;
+    parsing?: boolean;
+  };
+  const [attachments, setAttachments] = useState<ChatAttachmentItem[]>([]);
+  const [composerLongTextOpen, setComposerLongTextOpen] = useState(false);
   const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id));
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  };
 
   // Единый поток вложений: кнопка выбора файла, Ctrl+V и drag & drop.
   const attachFiles = async (files: File[]) => {
@@ -797,33 +1022,87 @@ function Index() {
     if (!isAuthed) { setAuthOpen(true); return; }
     if (isLocked) { setProfileOpen(true); return; }
     const MAX = 200 * 1024 * 1024;
+    const IMG_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "heic", "heif", "ico"]);
     for (const file of files.slice(0, 8)) {
       if (file.size > MAX) {
-        alert(t("File is too large") + " (max 200MB)");
+        toast.error(t("File is too large") + " (max 200MB)");
         continue;
       }
-      if (file.type.startsWith("image/")) {
-        // Картинки — в превью-чипы, не в текст поля.
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      const sizeLabel = formatFileSize(file.size);
+      if (file.type.startsWith("image/") || IMG_EXT.has(ext)) {
         try {
           const dataUrl = await readFileAsDataURL(file);
           const safeUrl = await normalizeImageForModel(dataUrl);
+          const mime = (safeUrl.startsWith("data:") ? safeUrl.slice(5, safeUrl.indexOf(";")) : file.type) || "image/png";
           setAttachments((prev) =>
-            prev.length >= 8 ? prev : [...prev, { id: crypto.randomUUID(), name: file.name || "image", dataUrl: safeUrl }],
+            prev.length >= 8
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    id: crypto.randomUUID(),
+                    kind: "image",
+                    name: file.name || "image.png",
+                    mimeType: mime,
+                    sizeLabel,
+                    dataUrl: safeUrl,
+                  },
+                ],
           );
         } catch {
           // ignore unreadable image
         }
         continue;
       }
-      const marker = `⏳ Reading **${file.name}**…`;
-      setInput((prev) => (prev ? prev + "\n\n" : "") + marker);
-      try {
-        const { parseAttachment } = await import("@/lib/file-parsers");
-        const res = await parseAttachment(file);
-        setInput((prev) => prev.replace(marker, res.content));
-      } catch (err: any) {
-        setInput((prev) => prev.replace(marker, `📎 **${file.name}** — failed to read: ${err?.message || String(err)}`));
-      }
+
+      // Не-изображения (PDF, DOCX, XLSX, TXT, код, архивы и т.п.) отображаем карточкой вложения на композере.
+      const attachmentId = crypto.randomUUID();
+      setAttachments((prev) =>
+        prev.length >= 8
+          ? prev
+          : [
+              ...prev,
+              {
+                id: attachmentId,
+                kind: "file",
+                name: file.name,
+                mimeType: file.type || "application/octet-stream",
+                sizeLabel,
+                dataUrl: "",
+                parsing: true,
+              },
+            ],
+      );
+
+      void (async () => {
+        try {
+          const [{ parseAttachment }, rawDataUrl] = await Promise.all([
+            import("@/lib/file-parsers"),
+            file.size <= 15 * 1024 * 1024 ? readFileAsDataURL(file).catch(() => "") : Promise.resolve(""),
+          ]);
+          const res = await parseAttachment(file);
+          setAttachments((prev) =>
+            prev.map((a) =>
+              a.id === attachmentId
+                ? { ...a, dataUrl: rawDataUrl, parsedContent: res.content, parsing: false }
+                : a,
+            ),
+          );
+        } catch (err: any) {
+          setAttachments((prev) =>
+            prev.map((a) =>
+              a.id === attachmentId
+                ? {
+                    ...a,
+                    parsedContent: `📎 **${file.name}** (${sizeLabel}) — failed to read: ${err?.message || String(err)}`,
+                    parsing: false,
+                  }
+                : a,
+            ),
+          );
+        }
+      })();
     }
   };
 
@@ -838,6 +1117,13 @@ function Index() {
     if (activeChatId) {
       const job = backgroundJobsRef.current.get(activeChatId);
       if (job) {
+        const receipt = job.receipt ?? activeChatReceiptRef.current;
+        if (isWithinCancelRefundWindow(receipt) && refundPrompt(receipt)) {
+          toast.info(t("Request cancelled within 5s — prompt refunded."));
+        }
+        if (activeChatReceiptRef.current === receipt) {
+          activeChatReceiptRef.current = null;
+        }
         job.controller.abort();
         backgroundJobsRef.current.delete(activeChatId);
         setGeneratingChatIds((prev) => {
@@ -845,6 +1131,12 @@ function Index() {
           next.delete(activeChatId);
           return next;
         });
+      }
+    } else if (activeChatReceiptRef.current) {
+      const receipt = activeChatReceiptRef.current;
+      activeChatReceiptRef.current = null;
+      if (isWithinCancelRefundWindow(receipt) && refundPrompt(receipt)) {
+        toast.info(t("Request cancelled within 5s — prompt refunded."));
       }
     }
   };
@@ -892,6 +1184,7 @@ function Index() {
     const { data } = await supabase
       .from("chat_messages")
       .select("id, role, content, reasoning, artifacts, images, position")
+      .eq("user_id", user.id)
       .eq("chat_id", chatId)
       .order("position", { ascending: true });
     if (data) {
@@ -947,6 +1240,10 @@ function Index() {
       }
       return;
     }
+    await supabase.from("chat_messages").delete().eq("chat_id", chatId);
+    if (user.id !== GUEST_ID) {
+      void deleteCloudEngineProject(user.id, chatId);
+    }
     const { error } = await supabase.from("chats").delete().eq("id", chatId);
     if (!error) {
       setChats((prev) => prev.filter((c) => c.id !== chatId));
@@ -977,6 +1274,8 @@ function Index() {
     chatId: string | null,
     assistantMsg: ChatMessage,
     assistantPosition: number,
+    sentAttachments: Array<{ name: string; dataUrl: string; mimeType?: string }> = [],
+    receipt: PromptReceipt | null = null,
   ) => {
     const controller = new AbortController();
     const currentAssistantMsg: ChatMessage = { ...assistantMsg };
@@ -988,6 +1287,7 @@ function Index() {
         baseMessages,
         assistantMsg: currentAssistantMsg,
         assistantPosition,
+        receipt,
       });
       setGeneratingChatIds((prev) => new Set(prev).add(chatId));
     }
@@ -1007,16 +1307,33 @@ function Index() {
     };
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const [{ data: sessionData }, deviceFp] = await Promise.all([
+        supabase.auth.getSession(),
+        getDeviceFingerprint().catch(() => ""),
+      ]);
       const accessToken = sessionData.session?.access_token;
+      const imageSnap = readPromptSnapshot(usageUid);
+      const filteredHistory = baseMessages.filter((m) => !m.limitCooldown);
+      let previousGeneratedImage: { dataUrl: string; messageIndex: number } | undefined;
+      for (let i = filteredHistory.length - 1; i >= 0; i -= 1) {
+        const imgs = filteredHistory[i].images;
+        if (imgs && imgs.length > 0) {
+          const lastImg = imgs[imgs.length - 1];
+          if (lastImg?.dataUrl?.startsWith("data:image/")) {
+            previousGeneratedImage = { dataUrl: lastImg.dataUrl, messageIndex: i };
+            break;
+          }
+        }
+      }
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+          ...(deviceFp ? { "x-device-fp": deviceFp } : {}),
         },
         body: JSON.stringify({
-          messages: baseMessages.map((m) => ({ role: m.role, content: m.content })),
+          messages: filteredHistory.map((m) => ({ role: m.role, content: m.content })),
           reasoning: thinking,
           webSearch,
           model,
@@ -1025,11 +1342,17 @@ function Index() {
           aiCreativity: window.localStorage.getItem("igseek:ai_creativity") || "balance",
           aiLength: window.localStorage.getItem("igseek:ai_length") || "medium",
           gmailConnected: !!getCachedGmailToken(),
-          userAttachments: attachments.map((a) => ({
+          userAttachments: sentAttachments.map((a) => ({
             name: a.name,
             dataUrl: a.dataUrl,
-            type: a.dataUrl.startsWith("data:") ? a.dataUrl.slice(5, a.dataUrl.indexOf(";")) : "application/octet-stream",
+            type: a.mimeType || (a.dataUrl.startsWith("data:") ? a.dataUrl.slice(5, a.dataUrl.indexOf(";")) : "application/octet-stream"),
           })),
+          ...(previousGeneratedImage ? { previousGeneratedImage } : {}),
+          ...(deviceFp ? { deviceFp } : {}),
+          imageQuota: {
+            used: imageSnap.usage.image,
+            resetAt: imageSnap.resetAt.image,
+          },
         }),
         signal: controller.signal,
       });
@@ -1113,6 +1436,31 @@ function Index() {
                   const img = JSON.parse(raw) as GeneratedImage;
                   currentAssistantMsg.pendingImage = undefined;
                   currentAssistantMsg.images = [...(currentAssistantMsg.images ?? []), img];
+                  consumePrompt("image", usageUid);
+                  updateLiveUi();
+                } catch { /* ignore */ }
+              } else if (currentEvent === "photo_usage") {
+                try {
+                  const quota = JSON.parse(raw) as { used?: number; limit?: number; resetAt?: number };
+                  if (typeof quota.used === "number" && quota.used >= PROMPT_LIMITS.image) {
+                    markScopeExhausted("image", usageUid, quota.resetAt);
+                  }
+                } catch { /* ignore */ }
+              } else if (currentEvent === "image_limit") {
+                try {
+                  const limitEvt = JSON.parse(raw) as {
+                    used?: number;
+                    limit?: number;
+                    resetAt?: number;
+                  };
+                  const effectiveReset = markScopeExhausted("image", usageUid, limitEvt.resetAt);
+                  currentAssistantMsg.pendingImage = undefined;
+                  currentAssistantMsg.limitCooldown = {
+                    scope: "image",
+                    used: limitEvt.used ?? PROMPT_LIMITS.image,
+                    limit: limitEvt.limit ?? PROMPT_LIMITS.image,
+                    resetAt: effectiveReset,
+                  };
                   updateLiveUi();
                 } catch { /* ignore */ }
               } else if (currentEvent === "web_image") {
@@ -1161,7 +1509,13 @@ function Index() {
                       body: gmailEvt.body,
                       attachments: gmailEvt.attachments,
                     })
-                      .then(() => toast.success(`Письмо успешно отправлено через Gmail!${gmailEvt.attachments?.length ? ` (Вложено файлов: ${gmailEvt.attachments.length})` : ""}`))
+                      .then(() =>
+                        toast.success(
+                          gmailEvt.attachments?.length
+                            ? `${t("Email sent via Gmail!")} (${t("Attached files:")} ${gmailEvt.attachments.length})`
+                            : t("Email sent via Gmail!"),
+                        ),
+                      )
                       .catch(() => saveLocalEmail(gmailEvt));
                   }
                 } catch { /* ignore */ }
@@ -1171,29 +1525,62 @@ function Index() {
                   currentAssistantMsg.refusals = [...(currentAssistantMsg.refusals ?? []), refEvt];
                   updateLiveUi();
                 } catch { /* ignore */ }
+              } else if (currentEvent === "tab_transition_event") {
+                try {
+                  const transEvt = JSON.parse(raw);
+                  currentAssistantMsg.tabTransitions = [...(currentAssistantMsg.tabTransitions ?? []), transEvt];
+                  updateLiveUi();
+                } catch { /* ignore */ }
               } else if (currentEvent === "memory_updated") {
                 window.dispatchEvent(new CustomEvent("igseek:memory-updated"));
                 setMemoryPulse((n) => n + 1);
                 currentAssistantMsg.memorySaved = true;
                 updateLiveUi();
               } else if (currentEvent === "error") {
-                throw new Error("stream error");
+                const hasExistingResult = Boolean(
+                  currentAssistantMsg.limitCooldown ||
+                  currentAssistantMsg.images?.length ||
+                  currentAssistantMsg.artifacts?.length ||
+                  currentAssistantMsg.webImages?.length ||
+                  currentAssistantMsg.calendarEvents?.length ||
+                  currentAssistantMsg.taskEvents?.length ||
+                  currentAssistantMsg.gmailEvents?.length ||
+                  contentBuf.trim()
+                );
+                if (!hasExistingResult) {
+                  throw new Error("stream error");
+                }
               }
             }
           }
         }
       }
-      if (!contentBuf.trim() && !reasoningBuf.trim() && !currentAssistantMsg.artifacts?.length && !currentAssistantMsg.images?.length && !currentAssistantMsg.webImages?.length) {
-        currentAssistantMsg.content = "⚠️ " + t("Не удалось получить ответ от сервера. Пожалуйста, попробуйте снова.");
+      if (!contentBuf.trim() && !reasoningBuf.trim() && !currentAssistantMsg.limitCooldown && !currentAssistantMsg.artifacts?.length && !currentAssistantMsg.images?.length && !currentAssistantMsg.webImages?.length && !currentAssistantMsg.calendarEvents?.length && !currentAssistantMsg.taskEvents?.length && !currentAssistantMsg.gmailEvents?.length) {
+        currentAssistantMsg.content = "⚠️ " + t("Failed to get a response from the server. Please try again.");
       }
       updateLiveUi();
     } catch (err: any) {
       if (err?.name !== "AbortError") {
-        const errorDetail = err?.message ? `: ${err.message}` : "";
-        currentAssistantMsg.content = currentAssistantMsg.content || ("⚠️ " + t("Something went wrong. Please try again.") + errorDetail);
-        updateLiveUi();
+        const hasExistingResult = Boolean(
+          currentAssistantMsg.limitCooldown ||
+          currentAssistantMsg.content?.trim() ||
+          currentAssistantMsg.artifacts?.length ||
+          currentAssistantMsg.images?.length ||
+          currentAssistantMsg.webImages?.length ||
+          currentAssistantMsg.calendarEvents?.length ||
+          currentAssistantMsg.taskEvents?.length ||
+          currentAssistantMsg.gmailEvents?.length
+        );
+        if (!hasExistingResult) {
+          const errorDetail = err?.message ? `: ${err.message}` : "";
+          currentAssistantMsg.content = currentAssistantMsg.content || ("⚠️ " + t("Something went wrong. Please try again.") + errorDetail);
+          updateLiveUi();
+        }
       }
     } finally {
+      if (activeChatReceiptRef.current === receipt) {
+        activeChatReceiptRef.current = null;
+      }
       if (chatId) {
         backgroundJobsRef.current.delete(chatId);
         setGeneratingChatIds((prev) => {
@@ -1253,15 +1640,31 @@ function Index() {
 
   const sendChat = async (text: string) => {
     const trimmed = text.trim();
+    if (attachments.some((a) => a.parsing)) return;
     if ((!trimmed && !attachments.length) || isSending) return;
     if (isLocked) { setProfileOpen(true); return; }
 
-    // Картинки-чипы превращаются в markdown на момент отправки.
-    const imageMd = attachments.map((a) => `![${a.name}](${a.dataUrl})`).join("\n");
-    const full = imageMd && trimmed ? `${imageMd}\n\n${trimmed}` : imageMd || trimmed;
+    const currentAttachments = [...attachments];
+    // Картинки-чипы -> markdown, файлы -> скрытая мета-обёртка <!--IGFILE:...--> с текстом внутри.
+    const imageMd = currentAttachments
+      .filter((a) => a.kind === "image")
+      .map((a) => `![${a.name}](${a.dataUrl})`)
+      .join("\n");
+    const fileMd = currentAttachments
+      .filter((a) => a.kind === "file")
+      .map((a) => {
+        const meta = encodeURIComponent(JSON.stringify({ name: a.name, size: a.sizeLabel, mimeType: a.mimeType }));
+        const body = a.parsedContent || `📎 **${a.name}** (${a.sizeLabel})`;
+        return `<!--IGFILE:${meta}-->\n${body}\n<!--/IGFILE-->`;
+      })
+      .join("\n");
+    const full = [imageMd, fileMd, trimmed].filter(Boolean).join("\n\n");
 
-    const currentTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const currentTime = new Date().toLocaleTimeString(localeFor(lang), { hour: "2-digit", minute: "2-digit" });
     const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: full, timestamp: currentTime };
+    const receipt: PromptReceipt | null = null;
+    activeChatReceiptRef.current = null;
+
     const assistantMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "assistant",
@@ -1273,7 +1676,7 @@ function Index() {
     setMessages([...nextMessages, assistantMsg]);
     setInput("");
     setAttachments([]);
-    if (/(письм|почт|gmail|email|отправь.*письмо|напиши.*на.*@)/i.test(trimmed) && !getCachedGmailToken()) {
+    if (/(письм|почт|gmail|email|отправь.*письмо|напиши.*на.*@|send.*email|enviar.*correo|envoyer.*mail)/i.test(trimmed) && !getCachedGmailToken()) {
       setGmailAuthOpen(true);
     }
     stickToBottomRef.current = true;
@@ -1321,9 +1724,10 @@ function Index() {
     } else if (user) {
       if (!chatId) {
         const title = chatTitleFrom(full);
+        const now = new Date().toISOString();
         const { data: created, error: createErr } = await supabase
           .from("chats")
-          .insert({ user_id: user.id, title })
+          .insert({ user_id: user.id, title, chat_type: "chat", updated_at: now })
           .select("id, title, updated_at")
           .maybeSingle();
         if (!createErr && created) {
@@ -1350,15 +1754,22 @@ function Index() {
       setGeneratingChatIds((prev) => new Set(prev).add(chatId!));
     }
 
-    await runAssistantTurn(nextMessages, chatId, assistantMsg, positionBase + 1);
+    await runAssistantTurn(nextMessages, chatId, assistantMsg, positionBase + 1, currentAttachments, receipt);
   };
 
   // Edit a user message: truncate everything after it, save the edit, regenerate the assistant reply.
   const editMessage = async (msgId: string, newText: string) => {
     const trimmed = newText.trim();
-    if (!trimmed || isSending) return;
+    if (!trimmed) return;
     const idx = messages.findIndex((m) => m.id === msgId);
     if (idx < 0 || messages[idx].role !== "user") return;
+
+    const editedUser: ChatMessage = { ...messages[idx], content: trimmed };
+    const baseMessages = [...messages.slice(0, idx), editedUser];
+    const keptIds = new Set(baseMessages.map((m) => m.id));
+    const removedIds = messages.slice(idx + 1).map((m) => m.id);
+    const receipt: PromptReceipt | null = null;
+    activeChatReceiptRef.current = null;
 
     if (activeChatId) {
       const job = backgroundJobsRef.current.get(activeChatId);
@@ -1372,8 +1783,6 @@ function Index() {
         });
       }
     }
-    const editedUser: ChatMessage = { ...messages[idx], content: trimmed };
-    const baseMessages = [...messages.slice(0, idx), editedUser];
     const assistantMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "assistant",
@@ -1388,36 +1797,84 @@ function Index() {
     if (user && activeChatId) {
       if (isGuest) {
         const store = readGuestStore();
-        const list = (store.messages[activeChatId] ?? []).filter((m) => m.position < idx);
-        store.messages[activeChatId] = list.map((m) => (m.id === msgId ? { ...m, content: trimmed } : m));
+        const filtered = (store.messages[activeChatId] ?? [])
+          .filter((m) => keptIds.has(m.id))
+          .map((m, i) => (m.id === msgId ? { ...m, content: trimmed, position: i } : { ...m, position: i }));
+        store.messages[activeChatId] = filtered;
         writeGuestStore(store);
       } else {
-        await supabase.from("chat_messages").update({ content: trimmed }).eq("id", msgId);
+        await supabase.from("chat_messages").update({ content: trimmed, position: idx }).eq("id", msgId);
+        if (removedIds.length > 0) {
+          await supabase.from("chat_messages").delete().in("id", removedIds);
+        }
         await supabase.from("chat_messages").delete().eq("chat_id", activeChatId).gt("position", idx);
       }
     }
-    await runAssistantTurn(baseMessages, activeChatId, assistantMsg, idx + 1);
+    await runAssistantTurn(baseMessages, activeChatId, assistantMsg, idx + 1, [], receipt);
   };
 
-  // Delete a message. If it's a user message, also delete the immediately following assistant reply.
+  // Delete a message pair: deleting a user message removes it and the AI reply;
+  // deleting an assistant message similarly removes it and the corresponding user message.
   const deleteMessage = async (msgId: string) => {
     const idx = messages.findIndex((m) => m.id === msgId);
     if (idx < 0) return;
     const target = messages[idx];
-    const removeAssistant = target.role === "user" && messages[idx + 1]?.role === "assistant";
-    const ids = removeAssistant ? [target.id, messages[idx + 1].id] : [target.id];
-    const removeCount = ids.length;
-    const nextMessages = [...messages.slice(0, idx), ...messages.slice(idx + removeCount)];
+    const ids: string[] = [target.id];
+    if (target.role === "user" && messages[idx + 1]?.role === "assistant") {
+      ids.push(messages[idx + 1].id);
+    } else if (target.role === "assistant" && messages[idx - 1]?.role === "user") {
+      ids.unshift(messages[idx - 1].id);
+    }
+
+    if (activeChatId) {
+      const job = backgroundJobsRef.current.get(activeChatId);
+      if (job && ids.includes(job.assistantMsg.id)) {
+        job.controller.abort();
+        backgroundJobsRef.current.delete(activeChatId);
+        setGeneratingChatIds((prev) => {
+          const next = new Set(prev);
+          next.delete(activeChatId);
+          return next;
+        });
+      }
+    }
+
+    const nextMessages = messages.filter((m) => !ids.includes(m.id));
     setMessages(nextMessages);
     if (user && activeChatId) {
       if (isGuest) {
         const store = readGuestStore();
-        store.messages[activeChatId] = (store.messages[activeChatId] ?? []).filter((m) => !ids.includes(m.id));
+        store.messages[activeChatId] = (store.messages[activeChatId] ?? [])
+          .filter((m) => !ids.includes(m.id))
+          .map((m, i) => ({ ...m, position: i }));
         writeGuestStore(store);
       } else {
         await supabase.from("chat_messages").delete().in("id", ids);
+        nextMessages.forEach((m, i) => {
+          void supabase.from("chat_messages").update({ position: i }).eq("id", m.id);
+        });
       }
     }
+  };
+
+  // Update any message text in-place (user or assistant) without wiping conversation history.
+  const updateMessageText = async (msgId: string, newText: string) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, content: newText } : m)),
+    );
+    if (user && activeChatId) {
+      if (isGuest || user.id === GUEST_ID) {
+        const store = readGuestStore();
+        const list = store.messages[activeChatId] ?? [];
+        store.messages[activeChatId] = list.map((m) =>
+          m.id === msgId ? { ...m, content: newText } : m,
+        );
+        writeGuestStore(store);
+      } else {
+        await supabase.from("chat_messages").update({ content: newText }).eq("id", msgId);
+      }
+    }
+    toast.success(t("Message text updated"));
   };
 
 
@@ -1443,7 +1900,7 @@ function Index() {
               // Firebase onAuthStateChange fires and sets user profile
             }}
             onGuestContinue={(name, email) => {
-              const cleanName = (name || email?.split("@")[0] || "Пользователь").trim().slice(0, 60);
+              const cleanName = (name || email?.split("@")[0] || t("User")).trim().slice(0, 60);
               const cleanEmail = (email || "").trim();
               window.localStorage.setItem(GUEST_KEY, JSON.stringify({ name: cleanName, email: cleanEmail, at: Date.now() }));
               setUser({ id: GUEST_ID, name: cleanName, email: cleanEmail, plan: "free", since: new Date().toISOString() });
@@ -1493,8 +1950,13 @@ function Index() {
       >
         {/* Sidebar Header */}
         <div className="flex w-[280px] md:w-[260px] shrink-0 items-center justify-between px-3.5 py-3 border-b border-zinc-200 dark:border-white/5">
-          <div className="flex items-center gap-2">
-            <img src={logoAsset} alt="IGseek" className="logo-mark h-7 w-7 shrink-0 object-contain" />
+          <div className="flex items-center gap-2 select-none">
+            <span
+              role="img"
+              aria-label="IGseek"
+              className="logo-mark h-7 w-7 shrink-0"
+              style={{ WebkitMaskImage: `url(${logoAsset})`, maskImage: `url(${logoAsset})` }}
+            />
             <div className="text-[17px] font-bold tracking-tight select-none">
               <span className="text-black dark:text-[var(--brand)] font-extrabold">IG</span>
               <span className="text-zinc-900 dark:text-white">seek</span>
@@ -1508,7 +1970,7 @@ function Index() {
                 onBlur={() => setTimeout(() => setLangOpen(false), 120)}
                 className="flex h-8 px-2 items-center gap-1 rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 hover:bg-zinc-200/80 dark:bg-[#161618]/80 dark:hover:bg-[#1f1f23] text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white transition-colors text-xs font-medium"
                 title={t("Language")}
-                aria-label="Change language"
+                aria-label={t("Change language")}
               >
                 <span>文A</span>
                 <ChevronDown className="h-3 w-3 text-zinc-400 shrink-0" />
@@ -1560,11 +2022,11 @@ function Index() {
                 if (mobileNavOpen) setMobileNavOpen(false);
                 else setSidebarOpen(false);
               }}
-              className="flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 hover:bg-zinc-200/80 dark:bg-[#161618]/80 dark:hover:bg-[#1f1f23] text-zinc-700 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white transition-colors"
+              className="flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 hover:bg-zinc-200/80 dark:bg-[#161618]/80 dark:hover:bg-[#1f1f23] text-zinc-700 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white transition-colors cursor-pointer"
               title={t("Close sidebar")}
-              aria-label="Close sidebar"
+              aria-label={t("Close sidebar")}
             >
-              <ChevronDown className="h-4 w-4" />
+              <ChevronLeft className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -1629,7 +2091,9 @@ function Index() {
 
 
               {/* Other Primary Items */}
-              {navPrimary.filter((n) => n.id !== "chat").map(({ id, icon: Icon, label }) => {
+              {navPrimary
+                .filter((n) => n.id !== "chat")
+                .map(({ id, icon: Icon, label, soon }) => {
                 const active = tab === id;
                 return (
                   <button
@@ -1643,9 +2107,9 @@ function Index() {
                   >
                     <Icon className={`h-4 w-4 shrink-0 ${active ? "text-white dark:text-[var(--brand)]" : "text-zinc-500 dark:text-zinc-400"}`} />
                     <span className="text-left whitespace-nowrap">{t(label)}</span>
-                    {id === "engine" && (
-                      <span className="ml-auto text-[9px] uppercase font-semibold text-zinc-500 bg-zinc-200 dark:bg-zinc-850 px-2 py-0.5 rounded-full">
-                        SOON
+                    {soon && (
+                      <span className="ml-auto text-[9px] uppercase font-semibold text-zinc-600 dark:text-zinc-300 bg-zinc-200 dark:bg-white/10 px-2 py-0.5 rounded-full">
+                        {t("SOON")}
                       </span>
                     )}
                   </button>
@@ -1715,7 +2179,7 @@ function Index() {
                               </span>
                             )}
                             {(generatingChatIds.has(c.id) || engineGeneratingChatIds.has(c.id)) && (
-                              <span className="shrink-0 flex items-center ml-auto text-[var(--brand)]" title="Нейросеть генерирует ответ…">
+                              <span className="shrink-0 flex items-center ml-auto text-[var(--brand)]" title={t("AI is generating a response…")}>
                                 <Loader2 className="h-3 w-3 animate-spin text-[var(--brand)]" />
                               </span>
                             )}
@@ -1799,30 +2263,23 @@ function Index() {
           }}
         />
 
-        {/* Top bar */}
-        <header className="shrink-0 relative z-40 flex items-center justify-between px-3 py-2.5 md:px-5 md:py-3.5">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-            <button
-              onClick={() => {
-                if (window.innerWidth < 768) setMobileNavOpen(true);
-                else setSidebarOpen((v) => !v);
-              }}
-              aria-label="Toggle menu"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-white hover:bg-zinc-100 dark:bg-[#161618]/80 dark:hover:bg-[#1f1f23] text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white transition-colors shadow-sm"
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-
-            {/* Logo */}
-            <div className="flex items-center gap-1.5 mr-1 select-none">
-              <img src={logoAsset} alt="IGseek" className="logo-mark h-6 w-6 shrink-0 object-contain" />
-              <span className="font-bold text-[16px] tracking-tight">
-                <span className="text-black dark:text-[var(--brand)] font-extrabold">IG</span>
-                <span className="text-zinc-900 dark:text-white">seek</span>
-              </span>
+        {/* Top bar (Flow renders its own studio header with sidebar toggle) */}
+        {tab !== "flow" && (
+          <header className="shrink-0 relative z-40 flex items-center justify-between px-3 py-2.5 md:px-5 md:py-3.5">
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              <button
+                onClick={() => {
+                  if (window.innerWidth < 768) setMobileNavOpen(true);
+                  else setSidebarOpen((v) => !v);
+                }}
+                aria-label={t("Toggle sidebar")}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-white hover:bg-zinc-100 dark:bg-[#161618]/80 dark:hover:bg-[#1f1f23] text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white transition-colors shadow-sm"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
             </div>
-          </div>
-        </header>
+          </header>
+        )}
 
         {/* Content */}
         <div
@@ -1832,7 +2289,7 @@ function Index() {
             stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
           }}
         >
-          <div className={`mx-auto flex w-full flex-col px-3 md:px-6 ${tab === "engine" ? "max-w-5xl h-full pb-2 pt-2 min-h-0 flex-1" : "min-h-full max-w-3xl pb-6"} ${tab === "chat" && messages.length === 0 ? "justify-center pt-6" : tab === "engine" ? "" : "pt-4 md:pt-8"}`}>
+          <div className={`mx-auto flex w-full flex-col ${tab === "flow" ? "px-0 max-w-full min-h-full pb-16 pt-0" : "px-2 sm:px-4 md:px-6"} ${tab === "engine" ? "max-w-5xl h-full pb-2 pt-2 min-h-0 flex-1" : tab === "flow" ? "" : "min-h-full max-w-3xl pb-6"} ${tab === "chat" && messages.length === 0 ? "justify-center pt-6" : tab === "engine" || tab === "flow" ? "" : "pt-4 md:pt-8"}`}>
             <AnimatePresence mode="wait">
               {tab === "chat" && (
                 <motion.div
@@ -1857,12 +2314,33 @@ function Index() {
                     onSend={sendChat}
                     onStop={stopStreaming}
                     onEdit={editMessage}
+                    onUpdateText={updateMessageText}
                     onDelete={deleteMessage}
                     messagesEndRef={messagesEndRef}
                   />
 
 
                 </motion.div>
+              )}
+
+              {tab === "flow" && (
+                <TabWrap key="flow">
+                  <FlowView
+                    userId={user?.id ?? null}
+                    isAuthed={isAuthed}
+                    onRequireAuth={() => setAuthOpen(true)}
+                    onOpenLibrary={() => setTab("library")}
+                    projects={projects}
+                    chats={chats}
+                    onCreateProject={createProject}
+                    agent={agent}
+                    model={model}
+                    onToggleSidebar={() => {
+                      if (window.innerWidth < 768) setMobileNavOpen((v) => !v);
+                      else setSidebarOpen((v) => !v);
+                    }}
+                  />
+                </TabWrap>
               )}
 
               {tab === "library" && <TabWrap key="library"><LibraryView
@@ -1895,6 +2373,10 @@ function Index() {
               {tab === "engine" && (
                 <TabWrap key="engine">
                   <EngineView
+                    cloudUid={!isGuest && user && user.id !== GUEST_ID ? user.id : null}
+                    usageUid={usageUid}
+                    model={model}
+                    agent={agent}
                     activeChatId={activeEngineChatId}
                     onActiveChatChange={(id) => setActiveEngineChatId(id)}
                     onGeneratingChange={(id, gen) => {
@@ -1913,6 +2395,8 @@ function Index() {
                     onSaveEngineChat={(id, title, userText, asstText, currentFiles, currentMessages, targetProjectId) => {
                       markEngineChatId(id);
                       const now = new Date().toISOString();
+                      const existingChat = chats.find((c) => c.id === id);
+                      const resolvedProjectId = targetProjectId !== undefined ? targetProjectId : (existingChat?.project_id ?? null);
                       setChats((prev) => {
                         const exists = prev.find((c) => c.id === id);
                         const effectiveProjectId = targetProjectId !== undefined ? targetProjectId : (exists?.project_id ?? null);
@@ -1925,7 +2409,7 @@ function Index() {
                       try {
                         window.localStorage.setItem(
                           `igseek:engine_proj_${id}`,
-                          JSON.stringify({ files: currentFiles, chatMessages: currentMessages, title })
+                          JSON.stringify({ files: currentFiles, chatMessages: currentMessages, title, updatedAt: now })
                         );
                       } catch {}
 
@@ -1946,13 +2430,20 @@ function Index() {
                         }));
                         writeGuestStore(store);
                       } else if (user) {
+                        void saveCloudEngineProject(user.id, {
+                          id,
+                          title,
+                          projectId: resolvedProjectId,
+                          files: currentFiles,
+                          chatMessages: currentMessages,
+                        });
                         void (async () => {
                           const { data: existing } = await supabase.from("chats").select("id, project_id").eq("id", id).maybeSingle();
                           const effectiveProjectId = targetProjectId !== undefined ? targetProjectId : (existing?.project_id ?? null);
                           if (existing) {
-                            await supabase.from("chats").update({ title, updated_at: now, project_id: effectiveProjectId }).eq("id", id);
+                            await supabase.from("chats").update({ title, updated_at: now, project_id: effectiveProjectId, chat_type: "engine" }).eq("id", id);
                           } else {
-                            await supabase.from("chats").insert({ id, title, user_id: user.id, updated_at: now, project_id: effectiveProjectId });
+                            await supabase.from("chats").insert({ id, title, user_id: user.id, updated_at: now, project_id: effectiveProjectId, chat_type: "engine" });
                           }
                         })();
                       }
@@ -1960,6 +2451,7 @@ function Index() {
                   />
                 </TabWrap>
               )}
+              {tab === "wave" && <TabWrap key="wave"><WaveView onGoToChat={() => setTab("chat")} /></TabWrap>}
               {tab === "docs" && <TabWrap key="docs"><DocsView /></TabWrap>}
             </AnimatePresence>
           </div>
@@ -1982,6 +2474,32 @@ function Index() {
         {tab === "chat" && messages.length > 0 && (
           <div className="shrink-0 z-30 px-2 sm:px-4 pb-3 sm:pb-4 pt-1 bg-background/95 dark:bg-background/90 backdrop-blur-md">
             <div className="mx-auto w-full max-w-3xl">
+              {isLongTextOverLimit(input) && (
+                <div className="mb-1.5 flex items-center justify-end">
+                  <LongTextButton
+                    onClick={() => setComposerLongTextOpen(true)}
+                    linesCount={countTextLines(input)}
+                  />
+                </div>
+              )}
+              <LongTextModal
+                isOpen={composerLongTextOpen}
+                title={t("Message text")}
+                subtitle={t("Draft before sending")}
+                initialText={input}
+                onClose={() => setComposerLongTextOpen(false)}
+                onSave={(next) => {
+                  setInput(next);
+                  toast.success(t("Draft updated"));
+                }}
+              />
+              {attachments.length > 0 && (
+                <ComposerAttachmentsTray
+                  attachments={attachments}
+                  onRemove={removeAttachment}
+                  className="mb-2"
+                />
+              )}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -1992,26 +2510,6 @@ function Index() {
                 }}
                 className="relative flex items-center gap-1 sm:gap-1.5 rounded-full border border-zinc-200 dark:border-white/10 bg-white/95 dark:bg-[#141416]/95 p-1 pl-2 sm:p-1.5 sm:pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-all w-full overflow-hidden"
               >
-                {attachments.length > 0 && (
-                  <div className="absolute bottom-full left-0 mb-2 flex flex-wrap gap-2 p-2 bg-white/95 dark:bg-[#141416]/95 border border-zinc-200 dark:border-white/10 rounded-2xl shadow-xl backdrop-blur-xl">
-                    {attachments.map((a) => (
-                      <div
-                        key={a.id}
-                        className="group/att relative h-12 w-12 sm:h-14 sm:w-14 shrink-0 overflow-hidden rounded-xl border border-zinc-200 dark:border-white/15 bg-background/60"
-                      >
-                        <img src={a.dataUrl} alt={a.name} className="h-full w-full object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => removeAttachment(a.id)}
-                          title={t("Remove")}
-                          className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-white"
-                        >
-                          <X className="h-2.5 w-2.5" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
                 {/* Paperclip */}
                 <button
@@ -2061,7 +2559,7 @@ function Index() {
                     if (!isAuthed) { setAuthOpen(true); return; }
                     if (isLocked) { setProfileOpen(true); return; }
                     const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                    if (!SR) { alert(t("Voice input is not supported in this browser")); return; }
+                    if (!SR) { toast.error(t("Voice input is not supported in this browser")); return; }
                     if (listening) {
                       try { recognitionRef.current?.stop(); } catch {}
                       setListening(false);
@@ -2130,7 +2628,7 @@ function Index() {
                     <button
                       type="button"
                       onClick={stopStreaming}
-                      title={t("Остановить генерацию")}
+                      title={t("Stop generation")}
                       className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-all shadow-md active:scale-95 cursor-pointer"
                     >
                       <Square className="h-3 w-3" fill="currentColor" />
@@ -2138,8 +2636,8 @@ function Index() {
                   )}
                   <button
                     type="submit"
-                    disabled={isAuthed && !input.trim() && !attachments.length}
-                    title={isAuthed ? (isSending ? t("Отправить в очередь") : t("Send")) : t("Sign in to send")}
+                    disabled={attachments.some((a) => a.parsing) || (isAuthed && !input.trim() && !attachments.length)}
+                    title={isAuthed ? (isSending ? t("Send to queue") : t("Send")) : t("Sign in to send")}
                     className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md shadow-black/20 dark:shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   >
                     <ArrowUp className="h-4 w-4" />
@@ -2156,11 +2654,19 @@ function Index() {
         {profileOpen && user && (
           <ProfileModal
             user={user}
+            isGuest={isGuest}
+            usageUid={usageUid}
             onClose={() => setProfileOpen(false)}
             onSignOut={signOut}
             onUpdate={updateUser}
             model={model}
             onModelChange={setModel}
+            onAgentChange={(nextAgent) => setAgent(nextAgent as AgentId)}
+            onSaveCloudPrefs={(patch) => {
+              if (!isGuest && user.id !== GUEST_ID) {
+                void supabase.from("profiles").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", user.id);
+              }
+            }}
           />
         )}
       </AnimatePresence>
@@ -2180,9 +2686,127 @@ function Index() {
           />
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {user && !isGuest && needsAccentOnboarding && (
+          <AccentOnboardingModal
+            theme={theme}
+            onConfirm={async (pickedAccent) => {
+              setAccent(pickedAccent);
+              applyAccent(pickedAccent, theme);
+              pendingOnboardingUidRef.current = null;
+              setNeedsAccentOnboarding(false);
+              try {
+                await supabase
+                  .from("profiles")
+                  .update({
+                    accent: pickedAccent,
+                    needs_accent_onboarding: false,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq("id", user.id);
+              } catch {
+                /* ignore transient error */
+              }
+              toast.success(t("Accent color saved"));
+            }}
+          />
+        )}
+      </AnimatePresence>
 
     </div>
     </TContext.Provider>
+  );
+}
+
+type ChatAttachmentItem = {
+  id: string;
+  kind: "image" | "file";
+  name: string;
+  mimeType: string;
+  sizeLabel: string;
+  dataUrl: string;
+  parsedContent?: string;
+  parsing?: boolean;
+};
+
+function ComposerAttachmentsTray({
+  attachments,
+  onRemove,
+  className = "",
+}: {
+  attachments: ChatAttachmentItem[];
+  onRemove: (id: string) => void;
+  className?: string;
+}) {
+  const t = useT();
+  if (!attachments.length) return null;
+
+  const isCodeFile = (name: string) => {
+    const ext = (name.split(".").pop() || "").toLowerCase();
+    return ["js", "jsx", "ts", "tsx", "py", "json", "html", "css", "scss", "sql", "sh", "yaml", "yml", "xml", "md", "go", "rs", "java", "cpp", "c", "php"].includes(ext);
+  };
+
+  return (
+    <div
+      className={`flex max-h-36 flex-wrap items-center gap-2 overflow-y-auto rounded-2xl border border-zinc-200 dark:border-white/10 bg-white/95 dark:bg-[#141416]/95 p-2 shadow-lg backdrop-blur-xl ${className}`}
+    >
+      {attachments.map((a) =>
+        a.kind === "image" ? (
+          <div
+            key={a.id}
+            className="group/att relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-zinc-200 dark:border-white/15 bg-zinc-100 dark:bg-[#1c1c20] shadow-xs"
+            title={a.name}
+          >
+            <img src={a.dataUrl} alt={a.name} className="h-full w-full object-cover" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 via-black/30 to-transparent px-1.5 py-0.5 text-[9px] font-medium text-white truncate">
+              {a.name}
+            </div>
+            <button
+              type="button"
+              onClick={() => onRemove(a.id)}
+              title={t("Remove")}
+              className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/75 hover:bg-black text-white shadow-sm transition-colors cursor-pointer"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : (
+          <div
+            key={a.id}
+            className="relative flex items-center gap-2.5 rounded-xl border border-zinc-200 dark:border-white/15 bg-zinc-50 dark:bg-[#1b1b1f] pl-2.5 pr-8 py-2 shadow-xs max-w-[230px] sm:max-w-[260px]"
+            title={a.name}
+          >
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-200 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-700 dark:text-[var(--brand)]">
+              {a.parsing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : isCodeFile(a.name) ? (
+                <FileCode className="h-4 w-4" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1 text-left">
+              <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100 truncate">
+                {a.name}
+              </div>
+              <div className="text-[10px] text-zinc-500 dark:text-zinc-400 uppercase tracking-wide truncate">
+                {a.parsing
+                  ? t("Reading file…")
+                  : `${(a.name.split(".").pop() || "FILE").toUpperCase()} · ${a.sizeLabel}`}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onRemove(a.id)}
+              title={t("Remove")}
+              className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-200/80 hover:bg-zinc-300 dark:bg-white/10 dark:hover:bg-white/20 text-zinc-700 dark:text-zinc-200 transition-colors cursor-pointer"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ),
+      )}
+    </div>
   );
 }
 
@@ -2216,6 +2840,7 @@ function ChatView({
   onSend,
   onStop,
   onEdit,
+  onUpdateText,
   onDelete,
   messagesEndRef,
 }: {
@@ -2223,7 +2848,7 @@ function ChatView({
   isLocked: boolean;
   input: string;
   setInput: (v: string) => void;
-  attachments: Array<{ id: string; name: string; dataUrl: string }>;
+  attachments: ChatAttachmentItem[];
   onRemoveAttachment: (id: string) => void;
   onAttach: () => void;
   onRequireAuth: () => void;
@@ -2233,10 +2858,12 @@ function ChatView({
   onSend: (text: string) => void;
   onStop?: () => void;
   onEdit: (msgId: string, newText: string) => void;
+  onUpdateText?: (msgId: string, newText: string) => void;
   onDelete: (msgId: string) => void;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const t = useT();
+  const [heroLongTextOpen, setHeroLongTextOpen] = useState(false);
   const [welcomeChips, setWelcomeChips] = useState<
     Array<{
       icon: any;
@@ -2251,86 +2878,86 @@ function ChatView({
     const pool = [
       {
         icon: TrendingUp,
-        label: "Анализ трендов недели",
-        prompt: "Найди и проанализируй основные тренды в моей нише за эту неделю",
-        category: "Аналитика",
+        label: "Weekly trend analysis",
+        prompt: "Find and analyze the key trends in my niche for this week",
+        category: "Analytics",
         color: "bg-[var(--brand-soft)] text-[var(--brand)]",
       },
       {
         icon: MailIcon,
-        label: "Открытка маме через Gmail",
-        prompt: "Сгенерируй открытку с днем рождения и отправь её моей маме по Gmail",
-        category: "Почта",
+        label: "Birthday card via Gmail",
+        prompt: "Generate a birthday card and send it to my mom via Gmail",
+        category: "Email",
         color: "bg-red-500/10 text-red-600 dark:bg-red-500/15 dark:text-red-400",
       },
       {
         icon: FileText,
-        label: "Отправь отчет боссу",
-        prompt: "Прочти отчет из памяти и отправь его боссу на электронную почту",
-        category: "Отчеты",
+        label: "Send report to boss",
+        prompt: "Read the report from memory and send it to my boss via email",
+        category: "Reports",
         color: "bg-blue-500/10 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400",
       },
       {
         icon: CalendarIcon,
-        label: "Запланируй встречу",
-        prompt: "Запланируй встречу завтра в 15:00 в Google Календаре",
-        category: "Календарь",
+        label: "Schedule a meeting",
+        prompt: "Schedule a meeting tomorrow at 15:00 in Google Calendar",
+        category: "Calendar",
         color: "bg-amber-500/10 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400",
       },
       {
         icon: CheckSquareIcon,
-        label: "Список задач в Tasks",
-        prompt: "Добавь задачи на сегодня в Google Tasks: 1. Проверить код 2. Отправить отчет",
-        category: "Задачи",
+        label: "Task list in Tasks",
+        prompt: "Add tasks for today in Google Tasks: 1. Review code 2. Send report",
+        category: "Tasks",
         color: "bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400",
       },
       {
         icon: ImageIcon,
-        label: "Сгенерируй арт",
-        prompt: "Сгенерируй футуристический концепт-арт неонового города будущего",
-        category: "ИИ Арт",
+        label: "Generate AI art",
+        prompt: "Generate futuristic concept art of a neon city of the future",
+        category: "AI Art",
         color: "bg-purple-500/10 text-purple-600 dark:bg-purple-500/15 dark:text-purple-400",
       },
       {
         icon: Code2,
-        label: "TypeScript сервис",
-        prompt: "Напиши эффективный TypeScript-модуль для параллельной обработки данных",
-        category: "Код",
+        label: "TypeScript service",
+        prompt: "Write an efficient TypeScript module for parallel data processing",
+        category: "Code",
         color: "bg-cyan-500/10 text-cyan-600 dark:bg-cyan-500/15 dark:text-cyan-400",
       },
       {
         icon: Globe,
-        label: "Сводка новостей ИИ",
-        prompt: "Найди актуальные новости об искусственном интеллекте за сегодня",
-        category: "Веб-поиск",
+        label: "AI news summary",
+        prompt: "Find the latest news about artificial intelligence today",
+        category: "Web search",
         color: "bg-green-500/10 text-green-600 dark:bg-green-500/15 dark:text-green-400",
       },
       {
         icon: Brain,
-        label: "Вложения и память",
-        prompt: "Прочти мои последние вложения из памяти и расскажи их ключевую суть",
-        category: "Память",
+        label: "Attachments & memory",
+        prompt: "Read my recent attachments from memory and summarize the key points",
+        category: "Memory",
         color: "bg-pink-500/10 text-pink-600 dark:bg-pink-500/15 dark:text-pink-400",
       },
       {
         icon: Zap,
-        label: "Стратегия маркетинга",
-        prompt: "Составь пошаговый план запуска продукта и привлечения клиентов",
-        category: "Стратегия",
+        label: "Marketing strategy",
+        prompt: "Create a step-by-step plan for launching a product and acquiring customers",
+        category: "Strategy",
         color: "bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400",
       },
       {
         icon: Users,
-        label: "Аудит конкурентов",
-        prompt: "Проведи быстрый аудит основных конкурентов и их рыночного позиционирования",
-        category: "Анализ",
+        label: "Competitor audit",
+        prompt: "Run a quick audit of key competitors and their market positioning",
+        category: "Analysis",
         color: "bg-indigo-500/10 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-400",
       },
       {
         icon: Hash,
-        label: "Темы для контента",
-        prompt: "Предложи 5 выигрышных тем для контент-плана на эту неделю",
-        category: "Контент",
+        label: "Content topics",
+        prompt: "Suggest 5 high-impact topics for this week's content plan",
+        category: "Content",
         color: "bg-rose-500/10 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400",
       },
     ];
@@ -2360,6 +2987,7 @@ function ChatView({
             message={m}
             isStreamingLast={isSending && i === messages.length - 1 && m.role === "assistant"}
             onEdit={onEdit}
+            onUpdateText={onUpdateText}
             onDelete={onDelete}
           />
         ))}
@@ -2391,11 +3019,12 @@ function ChatView({
         className="relative z-10 flex flex-col items-center text-center w-full max-w-2xl mx-auto px-4"
       >
         {/* Large Centered Fox Logo */}
-        <div className="relative mb-5 flex items-center justify-center">
-          <img
-            src={logoAsset}
-            alt="IGseek"
-            className="logo-mark relative h-20 w-20 object-contain drop-shadow-none dark:drop-shadow-[0_0_28px_var(--brand-glow-shadow)]"
+        <div className="relative mb-5 flex items-center justify-center dark:drop-shadow-[0_0_28px_var(--brand-glow-shadow)]">
+          <span
+            role="img"
+            aria-label="IGseek"
+            className="logo-mark relative h-20 w-20"
+            style={{ WebkitMaskImage: `url(${logoAsset})`, maskImage: `url(${logoAsset})` }}
           />
         </div>
 
@@ -2412,50 +3041,85 @@ function ChatView({
         </p>
 
         {/* Center Pill Composer */}
-        <form
-          onSubmit={(e) => { e.preventDefault(); submit(input); }}
-          className="mt-8 flex w-full max-w-xl items-center gap-2 rounded-full border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-all"
-        >
-          <button
-            type="button"
-            onClick={() => { if (guard()) onAttach(); }}
-            title={t("Attach file")}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors"
+        <div className="mt-8 flex w-full max-w-xl flex-col gap-2">
+          {attachments.length > 0 && (
+            <ComposerAttachmentsTray
+              attachments={attachments}
+              onRemove={onRemoveAttachment}
+            />
+          )}
+          <form
+            onSubmit={(e) => { e.preventDefault(); submit(input); }}
+            className="flex w-full items-center gap-2 rounded-full border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-all"
           >
-            <Paperclip className="h-4 w-4" />
-          </button>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onFocus={(e) => {
-              if (!isAuthed) { e.currentTarget.blur(); onRequireAuth(); }
-              else if (isLocked) { e.currentTarget.blur(); onLocked(); }
-            }}
-            readOnly={!isAuthed || isLocked}
-            placeholder={t("Ask IGseek anything…")}
-            className="flex-1 bg-transparent px-2 py-1.5 text-[15px] text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none min-w-0"
-          />
-          <div className="flex items-center gap-1.5 shrink-0">
-            {isSending && onStop && (
-              <button
-                type="button"
-                onClick={onStop}
-                title={t("Остановить генерацию")}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-all shadow-md active:scale-95 cursor-pointer"
-              >
-                <Square className="h-3 w-3" fill="currentColor" />
-              </button>
-            )}
             <button
-              type="submit"
-              disabled={(!input.trim() && !attachments.length)}
-              title={isSending ? t("Отправить в очередь") : t("Send")}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md shadow-black/20 dark:shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              type="button"
+              onClick={() => { if (guard()) onAttach(); }}
+              title={t("Attach file")}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors"
             >
-              <ArrowUp className="h-4 w-4" />
+              <Paperclip className="h-4 w-4" />
             </button>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit(input);
+                }
+              }}
+              onFocus={(e) => {
+                if (!isAuthed) { e.currentTarget.blur(); onRequireAuth(); }
+                else if (isLocked) { e.currentTarget.blur(); onLocked(); }
+              }}
+              rows={1}
+              readOnly={!isAuthed || isLocked}
+              placeholder={t("Ask IGseek anything…")}
+              className="flex-1 max-h-28 resize-none bg-transparent px-2 py-1.5 text-[15px] text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none min-w-0"
+            />
+            <div className="flex items-center gap-1.5 shrink-0">
+              {isSending && onStop && (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  title={t("Stop generation")}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                >
+                  <Square className="h-3 w-3" fill="currentColor" />
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={attachments.some((a) => a.parsing) || (!input.trim() && !attachments.length)}
+                title={isSending ? t("Send to queue") : t("Send")}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md shadow-black/20 dark:shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {isLongTextOverLimit(input) && (
+          <div className="mt-2 flex w-full max-w-xl justify-end">
+            <LongTextButton
+              onClick={() => setHeroLongTextOpen(true)}
+              linesCount={countTextLines(input)}
+            />
           </div>
-        </form>
+        )}
+        <LongTextModal
+          isOpen={heroLongTextOpen}
+          title={t("Prompt text")}
+          subtitle={t("Chat draft")}
+          initialText={input}
+          onClose={() => setHeroLongTextOpen(false)}
+          onSave={(next) => {
+            setInput(next);
+            toast.success(t("Draft updated"));
+          }}
+        />
 
         {/* 4 Dynamic Random Prompt Suggestions (2x2 Grid) */}
         <div className="mt-6 sm:mt-7 grid grid-cols-2 gap-2 sm:gap-3 w-full max-w-xl">
@@ -2463,14 +3127,14 @@ function ChatView({
             <button
               key={idx + chip.label}
               type="button"
-              onClick={() => submit(chip.prompt)}
+              onClick={() => submit(t(chip.prompt))}
               className="w-full min-w-0 h-11 sm:h-12 rounded-full border border-zinc-200 dark:border-white/10 bg-white hover:bg-zinc-50 dark:bg-[#141416]/90 dark:hover:bg-[#1c1c20] px-3 sm:px-4 flex items-center gap-2 sm:gap-2.5 shadow-sm transition-all active:scale-98 group cursor-pointer"
             >
               <span className={`flex h-6.5 w-6.5 sm:h-7 sm:w-7 items-center justify-center rounded-full shrink-0 ${chip.color}`}>
                 <chip.icon className="h-3.5 w-3.5" />
               </span>
               <span className="text-[12px] sm:text-[13px] md:text-sm text-zinc-800 dark:text-zinc-200 font-medium truncate text-left whitespace-nowrap">
-                {chip.label}
+                {t(chip.label)}
               </span>
             </button>
           ))}
@@ -2479,7 +3143,8 @@ function ChatView({
     </>
   );
 }
-function CodeBlock({ code, language }: { code: string; language: string }) {
+const CodeBlock = memo(function CodeBlock({ code, language }: { code: string; language: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -2491,12 +3156,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
     }
   };
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.22 }}
-      className="not-prose group relative my-3 max-w-full min-w-0 overflow-hidden rounded-xl border border-border bg-surface/60"
-    >
+    <div className="not-prose group relative my-3 max-w-full min-w-0 overflow-hidden rounded-xl border border-border bg-surface/60">
       <div className="flex items-center justify-between border-b border-border/70 bg-background/40 px-3 py-2 min-w-0">
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground min-w-0 truncate">
           <Code2 className="h-3.5 w-3.5 text-brand shrink-0" />
@@ -2510,12 +3170,12 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
           {copied ? (
             <>
               <Check className="h-3 w-3 text-brand" />
-              Copied
+              {t("Copied")}
             </>
           ) : (
             <>
               <Copy className="h-3 w-3" />
-              Copy
+              {t("Copy")}
             </>
           )}
         </button>
@@ -2523,14 +3183,16 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
       <pre className="m-0 max-w-full overflow-x-auto bg-transparent p-3 text-[12px] sm:text-[12.5px] leading-relaxed whitespace-pre font-mono">
         <code className={`language-${language} text-foreground/90 whitespace-pre break-normal`}>{code}</code>
       </pre>
-    </motion.div>
+    </div>
   );
-}
+});
 
-function MermaidBlock({ code }: { code: string }) {
+const MermaidBlock = memo(function MermaidBlock({ code }: { code: string }) {
+  const t = useT();
   const [svg, setSvg] = useState<string>("");
   const [error, setError] = useState<boolean>(false);
   const uniqueId = useRef(`mermaid-${Math.random().toString(36).slice(2, 9)}`);
+  const renderSeqRef = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -2543,12 +3205,13 @@ function MermaidBlock({ code }: { code: string }) {
           securityLevel: "loose",
           fontFamily: "inherit",
         });
-        const { svg: renderedSvg } = await mermaid.render(uniqueId.current, code);
+        const renderId = `${uniqueId.current}-${++renderSeqRef.current}`;
+        const { svg: renderedSvg } = await mermaid.render(renderId, code);
         if (active) {
           setSvg(renderedSvg);
           setError(false);
         }
-      } catch (err) {
+      } catch {
         if (active) {
           setError(true);
         }
@@ -2565,23 +3228,99 @@ function MermaidBlock({ code }: { code: string }) {
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      className="not-prose my-3 overflow-x-auto rounded-xl border border-border bg-surface/80 p-4 shadow-sm"
-    >
+    <div className="not-prose my-3 overflow-x-auto rounded-xl border border-border bg-surface/80 p-4 shadow-sm">
       <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border/50 pb-2">
         <Sparkles className="h-3.5 w-3.5 text-brand" />
-        <span>Схема / Диаграмма</span>
+        <span>{t("Diagram")}</span>
       </div>
       <div
         className="flex justify-center [&_svg]:max-w-full [&_svg]:h-auto text-foreground"
         dangerouslySetInnerHTML={{ __html: svg }}
       />
-    </motion.div>
+    </div>
   );
-}
+});
+
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
+const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
+const ENGINE_REMARK_PLUGINS = [remarkGfm];
+
+const MARKDOWN_COMPONENTS = {
+  table({ children }: any) {
+    return (
+      <div className="not-prose my-3 w-full max-w-full overflow-x-auto rounded-xl border border-zinc-200 dark:border-white/15 bg-white/50 dark:bg-[#1a1a1d] shadow-sm">
+        <table className="w-full min-w-max border-collapse text-left text-xs sm:text-sm">
+          {children}
+        </table>
+      </div>
+    );
+  },
+  thead({ children }: any) {
+    return (
+      <thead className="border-b border-zinc-200 dark:border-white/15 bg-zinc-100/90 dark:bg-[#222226] text-zinc-900 dark:text-zinc-100 font-semibold">
+        {children}
+      </thead>
+    );
+  },
+  tbody({ children }: any) {
+    return <tbody className="divide-y divide-zinc-200 dark:divide-white/10">{children}</tbody>;
+  },
+  tr({ children }: any) {
+    return <tr className="hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors">{children}</tr>;
+  },
+  th({ children }: any) {
+    return (
+      <th className="px-3 py-2 font-semibold text-zinc-900 dark:text-zinc-100 border-r last:border-r-0 border-zinc-200 dark:border-white/10 whitespace-nowrap">
+        {children}
+      </th>
+    );
+  },
+  td({ children }: any) {
+    return (
+      <td className="px-3 py-2 text-zinc-800 dark:text-zinc-200 border-r last:border-r-0 border-zinc-200 dark:border-white/10 whitespace-pre-wrap leading-relaxed">
+        {children}
+      </td>
+    );
+  },
+  code({ inline, className, children, ...props }: any) {
+    const match = /language-(\w+)/.exec(className || "");
+    const lang = match?.[1] ?? "text";
+    const raw = String(children ?? "").replace(/\n$/, "");
+    if (inline || (!match && !raw.includes("\n"))) {
+      return (
+        <code
+          className="rounded bg-surface px-1.5 py-0.5 text-[0.85em] text-brand border border-border/60"
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    }
+    if (lang === "mermaid") {
+      return <MermaidBlock code={raw} />;
+    }
+    return <CodeBlock code={raw} language={lang} />;
+  },
+  pre({ children }: any) {
+    return <>{children}</>;
+  },
+};
+
+const MemoMarkdown = memo(function MemoMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+      rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+      components={MARKDOWN_COMPONENTS}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
+const EngineMarkdown = memo(function EngineMarkdown({ content }: { content: string }) {
+  return <ReactMarkdown remarkPlugins={ENGINE_REMARK_PLUGINS}>{content}</ReactMarkdown>;
+});
 
 function ArtifactCard({ artifact }: { artifact: Artifact }) {
   const t = useT();
@@ -2675,13 +3414,13 @@ function GeneratedImageCard({ image }: { image: GeneratedImage }) {
       transition={{ duration: 0.25 }}
       className="overflow-hidden rounded-xl border border-border bg-surface/60 hover:border-brand/40 transition-colors"
     >
-      <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-        <div className="flex items-center gap-2.5">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background">
             <ImageIcon className="h-4 w-4 text-brand" />
           </div>
-          <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium">{image.title}</div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium" title={image.title}>{image.title}</div>
             <div className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
               {t("Image")}
             </div>
@@ -2690,10 +3429,10 @@ function GeneratedImageCard({ image }: { image: GeneratedImage }) {
         <button
           type="button"
           onClick={download}
-          className="glass-button inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium text-foreground hover:border-brand/40 hover:text-brand"
+          className="glass-button inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium text-foreground hover:border-brand/40 hover:text-brand"
         >
           <Download className="h-3.5 w-3.5" />
-          {t("Download")}
+          <span>{t("Download")}</span>
         </button>
       </div>
       <div className="p-2">
@@ -2714,6 +3453,7 @@ function GeneratedImageCard({ image }: { image: GeneratedImage }) {
 }
 
 function WebImageCard({ payload }: { payload: WebImagePayload }) {
+  const t = useT();
   const [selectedImg, setSelectedImg] = useState<string | null>(null);
 
   if (!payload.images || payload.images.length === 0) return null;
@@ -2727,7 +3467,7 @@ function WebImageCard({ payload }: { payload: WebImagePayload }) {
       <div className="flex items-center justify-between mb-2.5 px-1">
         <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
           <ImageIcon className="h-3.5 w-3.5 text-brand" />
-          <span>{payload.caption || `Изображения по запросу «${payload.query}»`}</span>
+          <span>{payload.caption || `${t("Images for:")} ${payload.query}`}</span>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -2775,11 +3515,14 @@ function WebImageCard({ payload }: { payload: WebImagePayload }) {
 }
 
 function CalendarEventCard({ event, onGoToCalendar }: { event: CalendarEventPayload; onGoToCalendar: () => void }) {
+  const t = useT();
+  const lang = useLang();
+  const loc = localeFor(lang);
   const formatTime = (iso?: string) => {
     if (!iso) return "";
     try {
       const d = new Date(iso);
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
     } catch {
       return iso;
     }
@@ -2788,7 +3531,7 @@ function CalendarEventCard({ event, onGoToCalendar }: { event: CalendarEventPayl
     if (!iso) return "";
     try {
       const d = new Date(iso);
-      return d.toLocaleDateString([], { day: "numeric", month: "long" });
+      return d.toLocaleDateString(loc, { day: "numeric", month: "long" });
     } catch {
       return iso;
     }
@@ -2806,7 +3549,7 @@ function CalendarEventCard({ event, onGoToCalendar }: { event: CalendarEventPayl
             <CalendarIcon className="h-4 w-4" />
           </div>
           <div>
-            <div className="font-semibold text-sm text-foreground">{event.summary || "Напоминание"}</div>
+            <div className="font-semibold text-sm text-foreground">{event.summary || t("Reminder")}</div>
             <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
               {event.start?.dateTime && (
                 <span>{formatDate(event.start.dateTime)} • {formatTime(event.start.dateTime)} - {formatTime(event.end?.dateTime)}</span>
@@ -2818,7 +3561,7 @@ function CalendarEventCard({ event, onGoToCalendar }: { event: CalendarEventPayl
           onClick={onGoToCalendar}
           className="glass-button inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium text-brand hover:bg-brand/20 transition-all shrink-0"
         >
-          <span>В Календарь</span>
+          <span>{t("Open Calendar")}</span>
           <ArrowUpRight className="h-3 w-3" />
         </button>
       </div>
@@ -2837,6 +3580,8 @@ function CalendarEventCard({ event, onGoToCalendar }: { event: CalendarEventPayl
 }
 
 function TaskEventCard({ task, onGoToTasks }: { task: { action: string; title: string; notes?: string; due?: string }; onGoToTasks: () => void }) {
+  const t = useT();
+  const lang = useLang();
   return (
     <motion.div
       initial={{ opacity: 0, y: 6, scale: 0.98 }}
@@ -2849,10 +3594,10 @@ function TaskEventCard({ task, onGoToTasks }: { task: { action: string; title: s
             <CheckSquareIcon className="h-4 w-4" />
           </div>
           <div>
-            <div className="font-semibold text-sm text-foreground">{task.title || "Задача"}</div>
+            <div className="font-semibold text-sm text-foreground">{task.title || t("Task")}</div>
             {task.due && (
               <div className="text-xs text-muted-foreground mt-0.5">
-                Срок: {new Date(task.due).toLocaleDateString([], { day: "numeric", month: "long" })}
+                {t("Due:")} {new Date(task.due).toLocaleDateString(localeFor(lang), { day: "numeric", month: "long" })}
               </div>
             )}
           </div>
@@ -2861,7 +3606,7 @@ function TaskEventCard({ task, onGoToTasks }: { task: { action: string; title: s
           onClick={onGoToTasks}
           className="glass-button inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium text-brand hover:bg-brand/20 transition-all shrink-0"
         >
-          <span>В Задачи</span>
+          <span>{t("Open Tasks")}</span>
           <ArrowUpRight className="h-3 w-3" />
         </button>
       </div>
@@ -2875,6 +3620,7 @@ function TaskEventCard({ task, onGoToTasks }: { task: { action: string; title: s
 }
 
 function GmailEventCard({ email, onGoToGmail }: { email: { action: string; to?: string; subject?: string; body?: string }; onGoToGmail: () => void }) {
+  const t = useT();
   const isConnected = !!getCachedGmailToken();
 
   return (
@@ -2890,20 +3636,20 @@ function GmailEventCard({ email, onGoToGmail }: { email: { action: string; to?: 
           </div>
           <div className="min-w-0">
             <div className="font-semibold text-sm text-foreground flex items-center gap-2">
-              <span className="truncate">{email.subject || "Письмо Gmail"}</span>
+              <span className="truncate">{email.subject || t("Gmail message")}</span>
               {isConnected ? (
                 <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded shrink-0">
-                  ✓ Gmail подключен
+                  ✓ {t("Gmail connected")}
                 </span>
               ) : (
                 <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded shrink-0">
-                  Требуется вход
+                  {t("Sign-in required")}
                 </span>
               )}
             </div>
             {email.to && (
               <div className="text-xs text-muted-foreground mt-0.5 truncate">
-                Кому: {email.to}
+                {t("To:")} {email.to}
               </div>
             )}
           </div>
@@ -2916,7 +3662,7 @@ function GmailEventCard({ email, onGoToGmail }: { email: { action: string; to?: 
               : "bg-red-600 hover:bg-red-700 text-white font-semibold shadow-sm"
           }`}
         >
-          <span>{isConnected ? "В Gmail" : "Войти в Gmail"}</span>
+          <span>{isConnected ? t("Open Gmail") : t("Sign in to Gmail")}</span>
           <ArrowUpRight className="h-3 w-3" />
         </button>
       </div>
@@ -2934,6 +3680,7 @@ function RefusalEventCard({
 }: {
   refusal: { action: string; reason: string; alternative: string };
 }) {
+  const t = useT();
   return (
     <motion.div
       initial={{ opacity: 0, y: 6, scale: 0.98 }}
@@ -2947,23 +3694,126 @@ function RefusalEventCard({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-xs text-amber-700 dark:text-amber-300">
-              Граница возможностей
+              {t("Capability limit")}
             </span>
             <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">
-              Не поддерживается
+              {t("Not supported")}
             </span>
           </div>
           <div className="text-xs text-foreground font-semibold">
-            Действие «{refusal.action}» напрямую невозможно
+            {t("Unsupported action:")} {refusal.action}
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
             {refusal.reason}
           </p>
           {refusal.alternative && (
             <div className="text-xs text-foreground/90 bg-background/60 dark:bg-black/20 p-2 rounded-md mt-1.5 border border-border/50">
-              💡 <span className="font-medium text-foreground">Альтернатива:</span> {refusal.alternative}
+              💡 <span className="font-medium text-foreground">{t("Alternative:")}</span> {refusal.alternative}
             </div>
           )}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function TabTransitionCard({
+  transition,
+  onNavigate,
+}: {
+  transition: {
+    targetTab: "engine" | "flow" | "library" | "saved";
+    title: string;
+    reason: string;
+    suggestedPrompt?: string;
+  };
+  onNavigate: (tab: TabId, prompt?: string) => void;
+}) {
+  const t = useT();
+  const meta = {
+    engine: {
+      name: t("Engine"),
+      desc: t("Full-stack development workspace, files, and live preview"),
+      icon: Code2,
+      badge: t("IDE & Build"),
+      cardClass: "border-sky-500/30 bg-sky-500/[0.05] dark:bg-sky-500/[0.08]",
+      iconBg: "bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/20",
+      buttonBg: "bg-sky-600 hover:bg-sky-500 text-white shadow-sky-500/20",
+    },
+    flow: {
+      name: t("Flow"),
+      desc: t("GitHub integration, autonomous agent, and terminal"),
+      icon: Workflow,
+      badge: t("Agent & GitHub"),
+      cardClass: "border-indigo-500/30 bg-indigo-500/[0.05] dark:bg-indigo-500/[0.08]",
+      iconBg: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
+      buttonBg: "bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20",
+    },
+    library: {
+      name: t("Library"),
+      desc: t("Storage for files, documents, and attachments"),
+      icon: Library,
+      badge: t("Library"),
+      cardClass: "border-emerald-500/30 bg-emerald-500/[0.05] dark:bg-emerald-500/[0.08]",
+      iconBg: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+      buttonBg: "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-500/20",
+    },
+    saved: {
+      name: t("Saved"),
+      desc: t("Bookmarks and saved messages"),
+      icon: Bookmark,
+      badge: t("Archive"),
+      cardClass: "border-amber-500/30 bg-amber-500/[0.05] dark:bg-amber-500/[0.08]",
+      iconBg: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20",
+      buttonBg: "bg-amber-600 hover:bg-amber-500 text-white shadow-amber-500/20",
+    },
+  }[transition.targetTab] || {
+    name: transition.targetTab,
+    desc: t("Specialized platform section"),
+    icon: ExternalLink,
+    badge: t("Section"),
+    cardClass: "border-primary/30 bg-primary/[0.05] dark:bg-primary/[0.08]",
+    iconBg: "bg-primary/15 text-primary border-primary/20",
+    buttonBg: "bg-primary hover:bg-primary/90 text-primary-foreground",
+  };
+
+  const Icon = meta.icon;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      className={`overflow-hidden rounded-xl border ${meta.cardClass} p-3.5 my-2.5 shadow-sm`}
+    >
+      <div className="flex items-start gap-3">
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${meta.iconBg} border shadow-sm`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-xs tracking-tight text-foreground">
+              {transition.title}
+            </span>
+            <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-background/80 border border-border/60 text-muted-foreground">
+              {meta.badge}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {transition.reason}
+          </p>
+          <div className="pt-1.5 flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[11px] text-muted-foreground/90 flex items-center gap-1">
+              {t("Recommended section:")} <strong className="text-foreground font-medium">{meta.name}</strong>
+            </span>
+            <button
+              type="button"
+              onClick={() => onNavigate(transition.targetTab, transition.suggestedPrompt)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all shadow-sm active:scale-95 ${meta.buttonBg}`}
+            >
+              <span>{t("Open")} {meta.name}</span>
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
       </div>
     </motion.div>
@@ -2980,8 +3830,8 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
       transition={{ duration: 0.25 }}
       className="overflow-hidden rounded-xl border border-border bg-surface/60"
     >
-      <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-        <div className="flex items-center gap-2.5">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background">
             <motion.div
               animate={{ opacity: [0.5, 1, 0.5] }}
@@ -2990,16 +3840,16 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
               <ImageIcon className="h-4 w-4 text-brand" />
             </motion.div>
           </div>
-          <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium">{title}</div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium" title={title}>{title}</div>
             <div className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
               {t("Image")}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          {t("Generating image")}…
+        <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin text-brand" />
+          <span className="whitespace-nowrap">{t("Generating image")}…</span>
         </div>
       </div>
       <div className="p-2">
@@ -3078,13 +3928,21 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
 
 
 // Разбирает содержимое сообщения пользователя: прикреплённые картинки
-// (markdown с data-URL) отдельными частями, остальное — текстом.
-// Служебная строка парсера («🖼️ имя (вес)») не показывается — только фото и текст.
+// (markdown с data-URL) и файлы (<!--IGFILE:...-->) отдельными частями, остальное — текстом.
+// Служебная строка парсера («🖼️ имя (вес)») не показывается — только фото, файлы и текст.
 function splitUserContent(
   content: string,
-): Array<{ type: "text"; text: string } | { type: "image"; url: string }> {
-  const re = /!\[[^\]]*\]\((data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+)\)/g;
-  const parts: Array<{ type: "text"; text: string } | { type: "image"; url: string }> = [];
+): Array<
+  | { type: "text"; text: string }
+  | { type: "image"; url: string; name?: string }
+  | { type: "file"; name: string; size?: string; mimeType?: string }
+> {
+  const re = /<!--IGFILE:([^>]+)-->[\s\S]*?<!--\/IGFILE-->|!\[([^\]]*)\]\((data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+)\)/g;
+  const parts: Array<
+    | { type: "text"; text: string }
+    | { type: "image"; url: string; name?: string }
+    | { type: "file"; name: string; size?: string; mimeType?: string }
+  > = [];
   const cleanText = (raw: string) =>
     raw
       .split("\n")
@@ -3098,11 +3956,39 @@ function splitUserContent(
   let last = 0;
   for (const match of content.matchAll(re)) {
     pushText(content.slice(last, match.index));
-    parts.push({ type: "image", url: match[1] });
+    if (match[1]) {
+      try {
+        const meta = JSON.parse(decodeURIComponent(match[1])) as {
+          name?: string;
+          size?: string;
+          mimeType?: string;
+        };
+        parts.push({
+          type: "file",
+          name: meta.name || "file",
+          size: meta.size,
+          mimeType: meta.mimeType,
+        });
+      } catch {
+        parts.push({ type: "file", name: "file" });
+      }
+    } else if (match[3]) {
+      parts.push({ type: "image", url: match[3], name: match[2] || undefined });
+    }
     last = (match.index ?? 0) + match[0].length;
   }
   pushText(content.slice(last));
   return parts;
+}
+
+function mergeUserTextWithAttachments(originalContent: string, nextVisibleText: string): string {
+  const attachmentMatches = originalContent.match(
+    /<!--IGFILE:[^>]+-->[\s\S]*?<!--\/IGFILE-->|!\[[^\]]*\]\(data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+\)/g,
+  );
+  const cleanNext = nextVisibleText.trim();
+  if (!attachmentMatches?.length) return cleanNext;
+  const prefix = attachmentMatches.join("\n");
+  return cleanNext ? `${prefix}\n\n${cleanNext}` : prefix;
 }
 
 function readFileAsDataURL(file: File): Promise<string> {
@@ -3144,38 +4030,269 @@ async function normalizeImageForModel(dataUrl: string): Promise<string> {
   }
 }
 
-// Название чата из первого сообщения: без markdown-картинок и base64-стен.
+// Название чата из первого сообщения: без markdown-картинок, файлов и base64-стен.
 function chatTitleFrom(text: string): string {
-  const withoutImages = text.replace(/!\[[^\]]*\]\(data:[^)]*\)/g, "").replace(/\s+/g, " ").trim();
-  if (withoutImages) return withoutImages.slice(0, 60);
+  const withoutAttachments = stripAttachmentsForLineCount(text).replace(/\s+/g, " ").trim();
+  if (withoutAttachments) return withoutAttachments.slice(0, 60);
+  const fileMatch = text.match(/<!--IGFILE:([^>]+)-->/);
+  if (fileMatch?.[1]) {
+    try {
+      const meta = JSON.parse(decodeURIComponent(fileMatch[1])) as { name?: string };
+      if (meta.name) return `📎 ${meta.name}`.slice(0, 60);
+    } catch {}
+  }
   const alt = text.match(/!\[([^\]]*)\]/)?.[1]?.trim();
   if (alt) return alt.slice(0, 60);
-  return "📷 Изображение";
+  return `📷 ${makeT(readStoredLang())("Image")}`;
 }
 
-function MessageBubble({
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const value = text.trim();
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // fallback below
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = value;
+    ta.setAttribute("readonly", "");
+    ta.className = "fixed -left-[9999px] top-0 opacity-0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+const MessageBubble = memo(function MessageBubble({
   message,
   isStreamingLast,
   onEdit,
+  onUpdateText,
   onDelete,
 }: {
   message: ChatMessage;
   isStreamingLast: boolean;
   onEdit?: (id: string, text: string) => void;
+  onUpdateText?: (id: string, text: string) => void;
   onDelete?: (id: string) => void;
 }) {
   const t = useT();
   const [showReasoning, setShowReasoning] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [draft, setDraft] = useState(message.content);
+  const [longTextOpen, setLongTextOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPlace, setMenuPlace] = useState<"above" | "below" | "floating">("above");
+  const [isHolding, setIsHolding] = useState(false);
+  const bubbleWrapRef = useRef<HTMLDivElement>(null);
+  const holdTimerRef = useRef<number | null>(null);
+  const holdOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressClickRef = useRef(false);
+  const onEditRef = useRef(onEdit);
+  const onUpdateTextRef = useRef(onUpdateText);
+  const onDeleteRef = useRef(onDelete);
+  onEditRef.current = onEdit;
+  onUpdateTextRef.current = onUpdateText;
+  onDeleteRef.current = onDelete;
+
   const isUser = message.role === "user";
+  const displayTextForCount = isUser ? stripAttachmentsForLineCount(message.content) : message.content;
+  const [draft, setDraft] = useState(displayTextForCount);
+  const showLongTextBtn = !isStreamingLast && isLongTextOverLimit(displayTextForCount);
+
+  const copyableText = isUser
+    ? displayTextForCount || message.content
+    : message.content ||
+      message.artifacts?.map((a) => a.content).filter(Boolean).join("\n\n") ||
+      "";
+
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current !== null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    holdOriginRef.current = null;
+    setIsHolding(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (holdTimerRef.current !== null) {
+        window.clearTimeout(holdTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [menuOpen]);
+
+  const openActionMenu = () => {
+    if (isEditing) return;
+    if (!isUser && isStreamingLast && !message.content) return;
+    const rect = bubbleWrapRef.current?.getBoundingClientRect();
+    if (!rect || typeof window === "undefined") {
+      setMenuPlace("floating");
+    } else if (rect.height > window.innerHeight * 0.58) {
+      setMenuPlace("floating");
+    } else if (rect.top >= 96) {
+      setMenuPlace("above");
+    } else if (window.innerHeight - rect.bottom >= 96) {
+      setMenuPlace("below");
+    } else {
+      setMenuPlace("floating");
+    }
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      /* ignore */
+    }
+    try {
+      navigator.vibrate?.(12);
+    } catch {
+      /* ignore */
+    }
+    setMenuOpen(true);
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isEditing || menuOpen) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, a, input, textarea, [data-no-longpress]")) return;
+
+    clearHoldTimer();
+    holdOriginRef.current = { x: e.clientX, y: e.clientY };
+    setIsHolding(true);
+    holdTimerRef.current = window.setTimeout(() => {
+      holdTimerRef.current = null;
+      holdOriginRef.current = null;
+      setIsHolding(false);
+      suppressClickRef.current = true;
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 350);
+      openActionMenu();
+    }, 420);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!holdOriginRef.current) return;
+    const dx = e.clientX - holdOriginRef.current.x;
+    const dy = e.clientY - holdOriginRef.current.y;
+    if (Math.hypot(dx, dy) > 8) {
+      clearHoldTimer();
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isEditing) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, a, input, textarea, [data-no-longpress]")) return;
+    e.preventDefault();
+    clearHoldTimer();
+    openActionMenu();
+  };
+
+  const handleCopyAction = async () => {
+    setMenuOpen(false);
+    const ok = await copyTextToClipboard(copyableText);
+    if (ok) {
+      toast.success(t("Copied"));
+    }
+  };
+
+  const handleEditAction = () => {
+    setMenuOpen(false);
+    setDraft(displayTextForCount);
+    setIsEditing(true);
+  };
+
+  const handleDeleteAction = () => {
+    setMenuOpen(false);
+    onDeleteRef.current?.(message.id);
+  };
+
+  const menuBarNode = (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.94, y: menuPlace === "below" ? -6 : 6 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.94, y: menuPlace === "below" ? -6 : 6 }}
+      transition={{ duration: 0.14 }}
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      className="flex items-center gap-1 rounded-2xl border border-zinc-200 dark:border-white/15 bg-white/95 dark:bg-[#18181c]/95 p-1.5 shadow-2xl backdrop-blur-xl"
+    >
+      {isUser && onEdit && (
+        <button
+          type="button"
+          onClick={handleEditAction}
+          className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-white/10 transition-colors whitespace-nowrap cursor-pointer"
+        >
+          <Pencil className="h-3.5 w-3.5 text-[var(--brand)]" />
+          <span>{t("Edit message")}</span>
+        </button>
+      )}
+      {copyableText.trim().length > 0 && (
+        <button
+          type="button"
+          onClick={() => void handleCopyAction()}
+          className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-white/10 transition-colors whitespace-nowrap cursor-pointer"
+        >
+          <Copy className="h-3.5 w-3.5 text-zinc-500 dark:text-zinc-300" />
+          <span>{t("Copy")}</span>
+        </button>
+      )}
+      {onDelete && (
+        <button
+          type="button"
+          onClick={handleDeleteAction}
+          className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors whitespace-nowrap cursor-pointer"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          <span>{t("Delete")}</span>
+        </button>
+      )}
+    </motion.div>
+  );
 
   const submitEdit = () => {
-    const next = draft.trim();
-    if (!next || next === message.content) { setIsEditing(false); return; }
+    const nextVisible = draft.trim();
+    const merged = isUser ? mergeUserTextWithAttachments(message.content, nextVisible) : nextVisible;
+    if (!merged || merged === message.content) { setIsEditing(false); return; }
     setIsEditing(false);
-    onEdit?.(message.id, next);
+    onEditRef.current?.(message.id, merged);
   };
+
+  const hasAnyCards = Boolean(
+    message.artifacts?.length ||
+    message.images?.length ||
+    message.webImages?.length ||
+    message.calendarEvents?.length ||
+    message.taskEvents?.length ||
+    message.gmailEvents?.length ||
+    message.pendingImage ||
+    message.limitCooldown
+  );
+  const shouldRenderBubble = Boolean(
+    message.content ||
+    message.reasoning !== undefined ||
+    isStreamingLast ||
+    !hasAnyCards
+  );
 
   return (
     <motion.div
@@ -3184,7 +4301,59 @@ function MessageBubble({
       transition={{ duration: 0.2 }}
       className={`group flex w-full min-w-0 ${isUser ? "justify-end" : "justify-start"}`}
     >
-      <div className="w-full max-w-[88%] sm:max-w-[85%] min-w-0">
+      {menuOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[1px]"
+            onClick={() => setMenuOpen(false)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenuOpen(false);
+            }}
+          />,
+          document.body,
+        )}
+      {menuOpen &&
+        menuPlace === "floating" &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-3">
+            <AnimatePresence>{menuBarNode}</AnimatePresence>
+          </div>,
+          document.body,
+        )}
+
+      <div
+        ref={bubbleWrapRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={clearHoldTimer}
+        onPointerCancel={clearHoldTimer}
+        onPointerLeave={clearHoldTimer}
+        onContextMenu={handleContextMenu}
+        onClickCapture={(e) => {
+          if (suppressClickRef.current) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+        className={`relative ${isEditing ? "w-full" : "w-fit"} max-w-[88%] sm:max-w-[85%] min-w-0 transition-transform duration-150 ${
+          menuOpen ? "z-50 scale-[0.99]" : isHolding ? "scale-[0.985]" : ""
+        }`}
+      >
+        <AnimatePresence>
+          {menuOpen && menuPlace !== "floating" && (
+            <div
+              className={`absolute z-50 ${
+                menuPlace === "above" ? "bottom-full mb-2" : "top-full mt-2"
+              } ${isUser ? "right-0" : "left-0"}`}
+            >
+              {menuBarNode}
+            </div>
+          )}
+        </AnimatePresence>
+
         {isUser ? (
           <div className="flex flex-col items-end gap-1 min-w-0 w-full">
             {isEditing ? (
@@ -3195,14 +4364,14 @@ function MessageBubble({
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitEdit(); }
-                    if (e.key === "Escape") { setIsEditing(false); setDraft(message.content); }
+                    if (e.key === "Escape") { setIsEditing(false); setDraft(displayTextForCount); }
                   }}
                   rows={Math.min(6, Math.max(2, draft.split("\n").length))}
                   className="w-full resize-none bg-transparent px-2 py-1 text-[14px] md:text-[15px] leading-relaxed outline-none"
                 />
                 <div className="mt-1 flex items-center justify-end gap-1.5">
                   <button
-                    onClick={() => { setIsEditing(false); setDraft(message.content); }}
+                    onClick={() => { setIsEditing(false); setDraft(displayTextForCount); }}
                     className="glass-button rounded-lg px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground"
                   >
                     {t("Cancel")}
@@ -3219,177 +4388,156 @@ function MessageBubble({
               (() => {
                 const parts = splitUserContent(message.content);
                 return (
-                  <div className="flex flex-col items-end gap-1 min-w-0 max-w-full">
+                  <div
+                    className={`flex flex-col items-end gap-1.5 min-w-0 max-w-full rounded-[24px] transition-shadow ${
+                      menuOpen ? "ring-2 ring-[var(--brand)] ring-offset-2 ring-offset-background" : ""
+                    }`}
+                  >
                     {parts.map((p, idx) =>
                       p.type === "image" ? (
                         <img
                           key={idx}
                           src={p.url}
-                          alt=""
+                          alt={p.name || ""}
                           loading="lazy"
-                          className="max-h-64 max-w-full rounded-2xl border border-[var(--brand-border)] object-cover"
+                          className="max-h-64 max-w-full rounded-2xl border border-[var(--brand-border)] object-cover shadow-xs"
                         />
+                      ) : p.type === "file" ? (
+                        <div
+                          key={idx}
+                          className="inline-flex items-center gap-2 rounded-2xl border border-zinc-200 dark:border-white/15 bg-white dark:bg-[#1a1a1e] px-3 py-2 text-xs text-zinc-900 dark:text-zinc-100 shadow-xs max-w-full"
+                        >
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-100 dark:bg-white/10 text-zinc-700 dark:text-[var(--brand)]">
+                            <FileText className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0 text-left">
+                            <div className="font-medium truncate max-w-[200px] sm:max-w-[260px]">{p.name}</div>
+                            {p.size && (
+                              <div className="text-[10px] text-zinc-500 dark:text-zinc-400 uppercase">{p.size}</div>
+                            )}
+                          </div>
+                        </div>
                       ) : (
                         <div
                           key={idx}
-                          className="max-w-full min-w-0 rounded-[22px] bg-zinc-900 border border-zinc-900 text-white dark:bg-[var(--brand-bubble-bg)] dark:border-[var(--brand-border)] dark:text-white px-4 sm:px-5 py-3 text-[14px] sm:text-[15px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] shadow-sm"
+                          className="max-w-full min-w-0 rounded-[22px] bg-zinc-900 border border-zinc-900 text-white dark:bg-[var(--brand-bubble-bg)] dark:border-[var(--brand-border)] dark:text-white px-4 sm:px-5 py-3 text-[14px] sm:text-[15px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word] shadow-sm"
                         >
                           {p.text.replace(/\*\*(.+?)\*\*/g, "$1")}
                         </div>
                       ),
                     )}
-                    <div className="text-[11px] text-zinc-500 mt-1 mr-2 text-right select-none">
-                      {message.timestamp || "17:05"}
+                    <div className="mt-1 mr-2 flex flex-wrap items-center justify-end gap-2">
+                      {showLongTextBtn && (
+                        <LongTextButton
+                          variant="user-bubble"
+                          label={t("Full text & edit")}
+                          onClick={() => setLongTextOpen(true)}
+                          linesCount={countTextLines(displayTextForCount)}
+                        />
+                      )}
+                      <span className="text-[11px] text-zinc-500 text-right select-none">
+                        {message.timestamp || "17:05"}
+                      </span>
                     </div>
                   </div>
                 );
               })()
-            )}
-            {!isEditing && (onEdit || onDelete) && (
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity mt-0.5 mr-2">
-                {onEdit && (
-                  <button
-                    onClick={() => { setDraft(message.content); setIsEditing(true); }}
-                    className="p-1 rounded-md text-zinc-500 hover:text-zinc-900 dark:hover:text-white"
-                    title={t("Edit")}
-                  >
-                    <Pencil className="h-3 w-3" />
-                  </button>
-                )}
-                {onDelete && (
-                  <button
-                    onClick={() => { if (confirm(t("Delete this message?"))) onDelete(message.id); }}
-                    className="p-1 rounded-md text-zinc-500 hover:text-[var(--brand)]"
-                    title={t("Delete")}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
             )}
           </div>
 
         ) : (
           <div className="flex flex-col items-start min-w-0 w-full">
             <div className="min-w-0 w-full">
-              <div className="w-full sm:w-fit max-w-full min-w-0 overflow-hidden rounded-[22px] border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-[#161619] px-4 sm:px-5 py-3.5 text-zinc-900 dark:text-white shadow-sm break-words">
-                {message.reasoning !== undefined && (
-                  <div className="mb-2 rounded-lg border border-border/60 bg-background/40">
-                    <button
-                      type="button"
-                      onClick={() => setShowReasoning((v) => !v)}
-                      className="glass-button flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
-                    >
-                      <Brain className="h-3.5 w-3.5 text-brand" />
-                      {t("Thinking")}
-                      {isStreamingLast && !message.content && (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      )}
-                      <ChevronDown
-                        className={`ml-auto h-3 w-3 transition-transform ${showReasoning ? "" : "-rotate-90"}`}
-                      />
-                    </button>
-                    {showReasoning && message.reasoning && (
-                      <div className="border-t border-border/50 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
-                        {message.reasoning}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {message.content ? (
-                  <div className="py-0.5 min-w-0 max-w-full">
-                    <div className="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words [overflow-wrap:anywhere] prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:font-bold prose-headings:tracking-tight prose-headings:break-words prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-code:text-brand prose-a:text-brand">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
-                        components={{
-                          table({ children }: any) {
-                            return (
-                              <div className="not-prose my-3 w-full max-w-full overflow-x-auto rounded-xl border border-zinc-200 dark:border-white/15 bg-white/50 dark:bg-[#1a1a1d] shadow-sm">
-                                <table className="w-full min-w-max border-collapse text-left text-xs sm:text-sm">
-                                  {children}
-                                </table>
-                              </div>
-                            );
-                          },
-                          thead({ children }: any) {
-                            return (
-                              <thead className="border-b border-zinc-200 dark:border-white/15 bg-zinc-100/90 dark:bg-[#222226] text-zinc-900 dark:text-zinc-100 font-semibold">
-                                {children}
-                              </thead>
-                            );
-                          },
-                          tbody({ children }: any) {
-                            return <tbody className="divide-y divide-zinc-200 dark:divide-white/10">{children}</tbody>;
-                          },
-                          tr({ children }: any) {
-                            return <tr className="hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors">{children}</tr>;
-                          },
-                          th({ children }: any) {
-                            return (
-                              <th className="px-3 py-2 font-semibold text-zinc-900 dark:text-zinc-100 border-r last:border-r-0 border-zinc-200 dark:border-white/10 whitespace-nowrap">
-                                {children}
-                              </th>
-                            );
-                          },
-                          td({ children }: any) {
-                            return (
-                              <td className="px-3 py-2 text-zinc-800 dark:text-zinc-200 border-r last:border-r-0 border-zinc-200 dark:border-white/10 whitespace-pre-wrap leading-relaxed">
-                                {children}
-                              </td>
-                            );
-                          },
-                          code({ inline, className, children, ...props }: any) {
-                            const match = /language-(\w+)/.exec(className || "");
-                            const lang = match?.[1] ?? "text";
-                            const raw = String(children ?? "").replace(/\n$/, "");
-                            if (inline || (!match && !raw.includes("\n"))) {
-                              return (
-                                <code
-                                  className="rounded bg-surface px-1.5 py-0.5 text-[0.85em] text-brand border border-border/60"
-                                  {...props}
-                                >
-                                  {children}
-                                </code>
-                              );
-                            }
-                            if (lang === "mermaid") {
-                              return <MermaidBlock code={raw} />;
-                            }
-                            return <CodeBlock code={raw} language={lang} />;
-                          },
-                          pre({ children }: any) {
-                            return <>{children}</>;
-                          },
-                        }}
+              {shouldRenderBubble && (
+                <div
+                  className={`w-full sm:w-fit max-w-full min-w-0 overflow-hidden rounded-[22px] border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-[#161619] px-4 sm:px-5 py-3.5 text-zinc-900 dark:text-white shadow-sm break-words [overflow-wrap:anywhere] [word-break:break-word] transition-shadow ${
+                    menuOpen ? "ring-2 ring-[var(--brand)] ring-offset-2 ring-offset-background" : ""
+                  }`}
+                >
+                  {message.reasoning !== undefined && (
+                    <div className="mb-2 rounded-lg border border-border/60 bg-background/40">
+                      <button
+                        type="button"
+                        onClick={() => setShowReasoning((v) => !v)}
+                        className="glass-button flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
                       >
-                        {message.content}
-                      </ReactMarkdown>
-                      {isStreamingLast && (
-                        <span className="inline-block h-3 w-1.5 -mb-0.5 ml-0.5 animate-pulse bg-brand" />
+                        <Brain className="h-3.5 w-3.5 text-brand" />
+                        {t("Thinking")}
+                        {isStreamingLast && !message.content && (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        )}
+                        <ChevronDown
+                          className={`ml-auto h-3 w-3 transition-transform ${showReasoning ? "" : "-rotate-90"}`}
+                        />
+                      </button>
+                      {showReasoning && message.reasoning && (
+                        <div className="border-t border-border/50 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                          {message.reasoning}
+                        </div>
                       )}
                     </div>
-                  </div>
-                ) : (
-                  !message.reasoning && !message.artifacts?.length && (
-                    isStreamingLast ? (
-                      <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-brand" />
-                        {t("Thinking")}…
+                  )}
+                  {message.content ? (
+                    <div className="py-0.5 min-w-0 max-w-full">
+                      <div className="prose prose-sm dark:prose-invert max-w-none min-w-0 break-words [overflow-wrap:anywhere] [word-break:break-word] prose-p:my-2 prose-p:leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:font-bold prose-headings:tracking-tight prose-headings:break-words prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-code:text-brand prose-a:text-brand">
+                        <MemoMarkdown content={message.content} />
+                        {isStreamingLast && (
+                          <span className="inline-block h-3 w-1.5 -mb-0.5 ml-0.5 animate-pulse bg-brand" />
+                        )}
                       </div>
-                    ) : (
-                      <div className="flex items-center gap-2 text-[13px] text-amber-500/90 dark:text-amber-400/90">
-                        <span>⚠️ {t("Ответ не получен. Попробуйте отправить запрос снова.")}</span>
-                      </div>
+                    </div>
+                  ) : (
+                    !message.reasoning && !hasAnyCards && (
+                      isStreamingLast ? (
+                        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-brand" />
+                          {t("Thinking")}…
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-[13px] text-amber-500/90 dark:text-amber-400/90">
+                          <span>⚠️ {t("No response received. Please try sending your request again.")}</span>
+                        </div>
+                      )
                     )
-                  )
-                )}
-                {message.content && (
-                  <div className="mt-2 text-[11px] text-zinc-500 select-none">
-                    {message.timestamp || "17:05"}
-                  </div>
-                )}
-              </div>
+                  )}
+                  {message.content && (
+                    <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] text-zinc-500 select-none">
+                        {message.timestamp || "17:05"}
+                      </span>
+                      {showLongTextBtn && (
+                        <LongTextButton
+                          label={isUser ? t("Full text & edit") : t("Full text")}
+                          onClick={() => setLongTextOpen(true)}
+                          linesCount={countTextLines(displayTextForCount)}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              <LongTextModal
+                isOpen={longTextOpen}
+                title={isUser ? t("User message") : t("Assistant reply")}
+                subtitle={message.timestamp || undefined}
+                initialText={displayTextForCount}
+                readOnly={!isUser}
+                onClose={() => setLongTextOpen(false)}
+                onSave={
+                  isUser && onUpdateText
+                    ? (next) =>
+                        onUpdateTextRef.current?.(
+                          message.id,
+                          mergeUserTextWithAttachments(message.content, next),
+                        )
+                    : undefined
+                }
+                onSaveAndRegenerate={
+                  isUser && onEdit
+                    ? (next) => onEditRef.current?.(message.id, mergeUserTextWithAttachments(message.content, next))
+                    : undefined
+                }
+              />
               {message.artifacts?.length ? (
                 <div className="mt-3 space-y-2">
                   {message.artifacts.map((a) => (
@@ -3419,14 +4567,14 @@ function MessageBubble({
               {message.calendarEvents?.length ? (
                 <div className="mt-3 space-y-2">
                   {message.calendarEvents.map((evt, idx) => (
-                    <CalendarEventCard key={idx} event={evt} onGoToCalendar={() => window.open("https://calendar.google.com", "_blank")} />
+                    <CalendarEventCard key={idx} event={evt} onGoToCalendar={() => window.open("https://calendar.google.com", "_blank", "noopener,noreferrer")} />
                   ))}
                 </div>
               ) : null}
               {message.taskEvents?.length ? (
                 <div className="mt-3 space-y-2">
                   {message.taskEvents.map((t, idx) => (
-                    <TaskEventCard key={idx} task={t} onGoToTasks={() => window.open("https://tasks.google.com", "_blank")} />
+                    <TaskEventCard key={idx} task={t} onGoToTasks={() => window.open("https://tasks.google.com", "_blank", "noopener,noreferrer")} />
                   ))}
                 </div>
               ) : null}
@@ -3441,7 +4589,7 @@ function MessageBubble({
                         if (!token) {
                           window.dispatchEvent(new CustomEvent("igseek:open-gmail-auth", { detail: g }));
                         } else {
-                          window.open("https://mail.google.com", "_blank");
+                          window.open("https://mail.google.com", "_blank", "noopener,noreferrer");
                         }
                       }}
                     />
@@ -3453,6 +4601,30 @@ function MessageBubble({
                   {message.refusals.map((ref, idx) => (
                     <RefusalEventCard key={idx} refusal={ref} />
                   ))}
+                </div>
+              ) : null}
+              {message.tabTransitions?.length ? (
+                <div className="mt-3 space-y-2">
+                  {message.tabTransitions.map((trans, idx) => (
+                    <TabTransitionCard
+                      key={idx}
+                      transition={trans}
+                      onNavigate={(targetTab, prompt) => {
+                        window.dispatchEvent(new CustomEvent("igseek:navigate-tab", { detail: targetTab }));
+                        toast.success(`${t("Opening tab:")} ${targetTab.toUpperCase()}`);
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {message.limitCooldown ? (
+                <div className="mt-1">
+                  <LimitCooldownCard
+                    scope={message.limitCooldown.scope}
+                    used={message.limitCooldown.used}
+                    limit={message.limitCooldown.limit}
+                    resetAt={message.limitCooldown.resetAt}
+                  />
                 </div>
               ) : null}
               {message.memorySaved && message.role === "assistant" && (
@@ -3483,7 +4655,7 @@ function MessageBubble({
       </div>
     </motion.div>
   );
-}
+}, (prev, next) => prev.message === next.message && prev.isStreamingLast === next.isStreamingLast);
 
 
 
@@ -3575,10 +4747,10 @@ function DiscoverView() {
             className="group rounded-xl border border-border p-4 transition-colors hover:border-brand/40 hover:bg-accent/40"
           >
             <div className="flex items-center justify-between">
-              <span className="rounded-md bg-accent/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{i.tag}</span>
+              <span className="rounded-md bg-accent/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{t(i.tag)}</span>
               <ArrowUpRight className="h-4 w-4 text-muted-foreground group-hover:text-brand transition-colors" />
             </div>
-            <div className="mt-3 text-sm font-medium">{i.title}</div>
+            <div className="mt-3 text-sm font-medium">{t(i.title)}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">{i.source}</div>
           </a>
         ))}
@@ -3591,7 +4763,7 @@ function DiscoverView() {
 function AnalyticsView({ isAuthed, onRequireAuth }: { isAuthed: boolean; onRequireAuth: () => void }) {
   const t = useT();
   const bars = [42, 58, 36, 74, 66, 88, 71];
-  const days = ["M", "T", "W", "T", "F", "S", "S"];
+  const days = [t("Mon"), t("Tue"), t("Wed"), t("Thu"), t("Fri"), t("Sat"), t("Sun")];
   return (
     <LockedShell
       title={t("Analytics")}
@@ -3666,8 +4838,9 @@ function LibraryView({
   const t = useT();
   const [libTab, setLibTab] = useState<"files" | "projects">("files");
   const [fileQuery, setFileQuery] = useState("");
-  const [fileCategory, setFileCategory] = useState<"all" | "image" | "doc" | "artifact">("all");
+  const [fileCategory, setFileCategory] = useState<"all" | "image" | "doc" | "artifact" | "flow">("all");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [previewFile, setPreviewFile] = useState<{ name: string; content: string; source: string } | null>(null);
 
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<Array<Artifact & { chatId: string }>>([]);
@@ -3676,6 +4849,60 @@ function LibraryView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [addOpen, setAddOpen] = useState(false);
+  const [cloudMediaMsgs, setCloudMediaMsgs] = useState<CloudChatMessageForLibrary[]>([]);
+
+  // Live listen for Flow updates & sync real disk files from sandbox /api/flow
+  useEffect(() => {
+    const onUpdated = () => setRefreshKey((k) => k + 1);
+    window.addEventListener("igseek:library-updated", onUpdated);
+    return () => window.removeEventListener("igseek:library-updated", onUpdated);
+  }, []);
+
+  // Load cloud chat attachments / generated images / artifacts when signed into Firebase
+  useEffect(() => {
+    let cancelled = false;
+    if (!userId || userId === GUEST_ID) {
+      setCloudMediaMsgs([]);
+      return;
+    }
+    void fetchCloudChatMessagesForLibrary(userId).then((items) => {
+      if (!cancelled) setCloudMediaMsgs(items);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, refreshKey, chats.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/flow", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-guest-mode": "true" },
+          body: JSON.stringify({ action: "list_library", projectId: openProjectId || null, includeContent: true }),
+        });
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        if (!cancelled && Array.isArray(json.files) && json.files.length > 0) {
+          const textFiles = json.files.filter((f: any) => f.isText && typeof f.content === "string");
+          if (textFiles.length > 0) {
+            upsertFlowLibraryFiles(
+              textFiles.map((f: any) => ({
+                name: f.name,
+                type: f.type || "document",
+                content: f.content,
+                projectId: f.projectId ?? openProjectId ?? null,
+              }))
+            );
+          }
+        }
+      } catch {
+        // non-fatal offline fallback
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [openProjectId]);
 
   const openProject = openProjectId ? projects.find((p) => p.id === openProjectId) ?? null : null;
   const projectChats = useMemo(
@@ -3694,11 +4921,26 @@ function LibraryView({
       setArtifacts([]);
       return;
     }
+    if (userId === GUEST_ID) {
+      const store = readGuestStore();
+      const flat: Array<Artifact & { chatId: string }> = [];
+      for (const c of projectChats) {
+        const msgs = store.messages[c.id] ?? [];
+        for (const m of msgs) {
+          if (Array.isArray(m.artifacts)) {
+            for (const a of m.artifacts) flat.push({ ...a, chatId: c.id });
+          }
+        }
+      }
+      setArtifacts(flat);
+      return;
+    }
     (async () => {
       const ids = projectChats.map((c) => c.id);
       const { data } = await supabase
         .from("chat_messages")
         .select("chat_id, artifacts")
+        .eq("user_id", userId)
         .in("chat_id", ids)
         .not("artifacts", "is", null);
       if (cancelled || !data) return;
@@ -3712,37 +4954,63 @@ function LibraryView({
     return () => { cancelled = true; };
   }, [openProjectId, userId, projectChats]);
 
-  // Collect all files across all chats for Media Library
+  // Collect all files across all chats AND Flow-created files for Media Library
   const allLibraryFiles = useMemo(() => {
-    const store = readGuestStore();
     const list: Array<{
       id: string;
       name: string;
       type: "image" | "doc" | "artifact";
       dataUrl?: string;
       url?: string;
+      content?: string;
       chatId: string;
       chatTitle: string;
       messageId: string;
       timestamp?: string;
-      source: "user_upload" | "generated" | "artifact";
+      source: "user_upload" | "generated" | "artifact" | "flow";
       snippet?: string;
+      flowFileId?: string;
+      projectId?: string | null;
     }> = [];
+
+    // 1. Flow-created / sandbox Library files (synced in real time from Firestore when signed in)
+    const flowFiles = readFlowLibraryFiles();
+    const projNameMap = new Map<string, string>();
+    projects.forEach((p) => projNameMap.set(p.id, p.name));
+
+    for (const ff of flowFiles) {
+      const mappedType: "image" | "doc" | "artifact" =
+        ff.type === "code" || ff.type === "data" || ff.type === "artifact" ? "artifact" : "doc";
+      const projLabel = ff.projectId ? projNameMap.get(ff.projectId) || t("Project") : null;
+      list.push({
+        id: ff.id,
+        flowFileId: ff.id,
+        name: ff.name,
+        type: mappedType,
+        content: ff.content,
+        dataUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(ff.content || "")}`,
+        chatId: "",
+        chatTitle: ff.taskTitle ? `Flow: ${ff.taskTitle}${projLabel ? ` (${projLabel})` : ""}` : `Flow${projLabel ? ` (${projLabel})` : ""}`,
+        messageId: "",
+        timestamp: ff.updatedAt,
+        source: "flow",
+        snippet: (ff.content || "").slice(0, 140),
+        projectId: ff.projectId,
+      });
+    }
 
     const chatTitleMap = new Map<string, string>();
     chats.forEach((c) => chatTitleMap.set(c.id, c.title));
 
-    for (const [chatId, msgs] of Object.entries(store.messages)) {
-      const title = chatTitleMap.get(chatId) || "Диалог";
-      if (!Array.isArray(msgs)) continue;
-
+    const appendMessagesMedia = (chatId: string, msgs: Array<{ id: string; content?: string; images?: any[]; artifacts?: any[] }>) => {
+      const title = chatTitleMap.get(chatId) || t("Chat");
       for (const m of msgs) {
         if (!m) continue;
         // 1. User uploaded markdown images/files ![name](dataUrl)
         if (m.content) {
           const matches = [...m.content.matchAll(/!\[([^\]]*)\]\((data:[^)]+)\)/g)];
           for (const match of matches) {
-            const name = match[1] || "Вложенный файл";
+            const name = match[1] || t("Attached file");
             const dataUrl = match[2];
             const isImg = dataUrl.startsWith("data:image/");
             list.push({
@@ -3762,7 +5030,7 @@ function LibraryView({
           for (const img of m.images) {
             list.push({
               id: img.id || `${m.id}_img`,
-              name: img.title || "Сгенерированное фото",
+              name: img.title || t("Generated photo"),
               type: "image",
               dataUrl: img.dataUrl,
               chatId,
@@ -3778,8 +5046,9 @@ function LibraryView({
           for (const art of m.artifacts) {
             list.push({
               id: art.id || `${m.id}_art`,
-              name: art.title ? (art.title.includes(".") ? art.title : `${art.title}.${art.language || "txt"}`) : "Артефакт.txt",
+              name: art.title ? (art.title.includes(".") ? art.title : `${art.title}.${art.language || "txt"}`) : `${t("Artifact")}.txt`,
               type: "artifact",
+              content: art.content || "",
               dataUrl: `data:text/plain;charset=utf-8,${encodeURIComponent(art.content || "")}`,
               chatId,
               chatTitle: title,
@@ -3790,15 +5059,40 @@ function LibraryView({
           }
         }
       }
+    };
+
+    if (userId && userId !== GUEST_ID) {
+      const byChat = new Map<string, CloudChatMessageForLibrary[]>();
+      for (const msg of cloudMediaMsgs) {
+        const cid = msg.chatId || "cloud";
+        const arr = byChat.get(cid) ?? [];
+        arr.push(msg);
+        byChat.set(cid, arr);
+      }
+      for (const [cid, msgs] of byChat.entries()) {
+        appendMessagesMedia(cid, msgs);
+      }
+    } else {
+      const store = readGuestStore();
+      for (const [chatId, msgs] of Object.entries(store.messages)) {
+        if (!Array.isArray(msgs)) continue;
+        appendMessagesMedia(chatId, msgs);
+      }
     }
+
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chats, refreshKey]);
+  }, [chats, projects, cloudMediaMsgs, userId, refreshKey]);
 
   const filteredLibraryFiles = useMemo(() => {
     return allLibraryFiles.filter((item) => {
-      const matchesSearch = !fileQuery.trim() || item.name.toLowerCase().includes(fileQuery.trim().toLowerCase()) || item.chatTitle.toLowerCase().includes(fileQuery.trim().toLowerCase());
-      const matchesCat = fileCategory === "all" || item.type === fileCategory;
+      const matchesSearch =
+        !fileQuery.trim() ||
+        item.name.toLowerCase().includes(fileQuery.trim().toLowerCase()) ||
+        item.chatTitle.toLowerCase().includes(fileQuery.trim().toLowerCase());
+      const matchesCat =
+        fileCategory === "all" ||
+        (fileCategory === "flow" ? item.source === "flow" : item.type === fileCategory);
       return matchesSearch && matchesCat;
     });
   }, [allLibraryFiles, fileQuery, fileCategory]);
@@ -3810,13 +5104,41 @@ function LibraryView({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    toast.success(`Скачивание файла «${file.name}» началось`);
+    toast.success(`${t("Downloading file:")} ${file.name}`);
   };
 
-  const handleRename = (file: typeof allLibraryFiles[0]) => {
-    const newName = prompt("Введите новое имя файла:", file.name);
+  const handleRename = async (file: typeof allLibraryFiles[0]) => {
+    const newName = prompt(t("Enter new file name:"), file.name);
     if (!newName || !newName.trim() || newName.trim() === file.name) return;
     const clean = newName.trim();
+
+    if (file.source === "flow" && file.flowFileId) {
+      const updated = renameStoredFlowLibraryFile(file.flowFileId, clean);
+      if (updated) {
+        void fetch("/api/flow", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-guest-mode": "true" },
+          body: JSON.stringify({
+            action: "rename_library_file",
+            oldName: file.name,
+            newName: clean,
+            projectId: file.projectId ?? null,
+          }),
+        }).catch(() => {});
+        toast.success(`${t("File renamed to:")} ${clean}`);
+        setRefreshKey((k) => k + 1);
+      }
+      return;
+    }
+
+    if (userId && userId !== GUEST_ID && file.messageId) {
+      const ok = await renameCloudChatMediaItem(file.messageId, file.name, clean);
+      if (ok) {
+        toast.success(`${t("File renamed to:")} ${clean}`);
+        setRefreshKey((k) => k + 1);
+      }
+      return;
+    }
 
     const store = readGuestStore();
     const msgs = store.messages[file.chatId];
@@ -3832,13 +5154,41 @@ function LibraryView({
         return { ...m, content, images, artifacts: artifactsArr };
       });
       writeGuestStore(store);
-      toast.success(`Файл переименован в «${clean}»`);
+      toast.success(`${t("File renamed to:")} ${clean}`);
       setRefreshKey((k) => k + 1);
     }
   };
 
-  const handleDelete = (file: typeof allLibraryFiles[0]) => {
-    if (!confirm(`Удалить файл «${file.name}» из истории диалога?`)) return;
+  const handleDelete = async (file: typeof allLibraryFiles[0]) => {
+    if (!confirm(`${t("Delete file from Library?")} ${file.name}`)) return;
+
+    if (file.source === "flow" && file.flowFileId) {
+      const removed = deleteStoredFlowLibraryFile(file.flowFileId);
+      if (removed) {
+        void fetch("/api/flow", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-guest-mode": "true" },
+          body: JSON.stringify({
+            action: "delete_library_file",
+            name: file.name,
+            projectId: file.projectId ?? null,
+          }),
+        }).catch(() => {});
+        toast.success(`${t("File deleted:")} ${file.name}`);
+        setRefreshKey((k) => k + 1);
+      }
+      return;
+    }
+
+    if (userId && userId !== GUEST_ID && file.messageId) {
+      const ok = await deleteCloudChatMediaItem(file.messageId, file.name);
+      if (ok) {
+        toast.success(`${t("File deleted:")} ${file.name}`);
+        setRefreshKey((k) => k + 1);
+      }
+      return;
+    }
+
     const store = readGuestStore();
     const msgs = store.messages[file.chatId];
     if (msgs) {
@@ -3852,7 +5202,7 @@ function LibraryView({
         return { ...m, content, images, artifacts: artifactsArr };
       });
       writeGuestStore(store);
-      toast.success(`Файл «${file.name}» удален`);
+      toast.success(`${t("File deleted:")} ${file.name}`);
       setRefreshKey((k) => k + 1);
     }
   };
@@ -3870,11 +5220,31 @@ function LibraryView({
   return (
     <LockedShell
       title={t("Library")}
-      description={t("Все приложенные файлы за всё время во всех чатах и рабочие пространства проектов.")}
+      description={t("All attached files across all chats and project workspaces.")}
       icon={Library}
       isAuthed={isAuthed}
       onRequireAuth={onRequireAuth}
     >
+      {/* File Content Preview Modal */}
+      {previewFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4" onClick={() => setPreviewFile(null)}>
+          <div className="w-full max-w-2xl rounded-2xl border border-border bg-background p-5 shadow-2xl space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-foreground truncate">{previewFile.name}</h3>
+                <span className="text-[10px] font-mono uppercase text-muted-foreground">{previewFile.source}</span>
+              </div>
+              <button onClick={() => setPreviewFile(null)} className="rounded-lg p-1.5 hover:bg-surface-elevated text-muted-foreground hover:text-foreground cursor-pointer">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <pre className="max-h-[60vh] overflow-y-auto rounded-xl bg-zinc-950 p-4 text-xs font-mono text-emerald-300/90 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+              {previewFile.content || t("(file is empty)")}
+            </pre>
+          </div>
+        </div>
+      )}
+
       {/* Top Tab Bar: Files vs Projects */}
       <div className="mb-5 flex items-center gap-2 border-b border-white/10 pb-3">
         <button
@@ -3886,7 +5256,7 @@ function LibraryView({
           }`}
         >
           <Paperclip className="h-4 w-4" />
-          <span>Все файлы и вложения ({allLibraryFiles.length})</span>
+          <span>{t("All files & attachments")} ({allLibraryFiles.length})</span>
         </button>
         <button
           onClick={() => setLibTab("projects")}
@@ -3897,7 +5267,7 @@ function LibraryView({
           }`}
         >
           <Folder className="h-4 w-4" />
-          <span>Проекты ({projects.length})</span>
+          <span>{t("Projects")} ({projects.length})</span>
         </button>
       </div>
 
@@ -3910,16 +5280,17 @@ function LibraryView({
               <input
                 value={fileQuery}
                 onChange={(e) => setFileQuery(e.target.value)}
-                placeholder="Поиск по названию файла или чата…"
+                placeholder={t("Search by file, chat, or Flow name…")}
                 className="w-full rounded-xl border border-border bg-surface/60 pl-9 pr-3 py-2 text-xs outline-none focus:border-brand"
               />
             </div>
             <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto pb-1 sm:pb-0">
               {[
-                { id: "all", label: "Все" },
-                { id: "image", label: "Картинки" },
-                { id: "doc", label: "Документы & Код" },
-                { id: "artifact", label: "Артефакты" },
+                { id: "all", label: t("All") },
+                { id: "flow", label: t("From Flow") },
+                { id: "image", label: t("Images") },
+                { id: "doc", label: t("Docs & Code") },
+                { id: "artifact", label: t("Artifacts") },
               ].map((c) => (
                 <button
                   key={c.id}
@@ -3940,9 +5311,9 @@ function LibraryView({
           {filteredLibraryFiles.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/70 p-8 text-center">
               <Paperclip className="mx-auto h-8 w-8 text-muted-foreground/50 mb-2" />
-              <div className="text-sm font-semibold">Файлы не найдены</div>
+              <div className="text-sm font-semibold">{t("No files found")}</div>
               <p className="text-xs text-muted-foreground mt-1">
-                Прикрепляйте картинки, документы и файлы к сообщениям в чате — они автоматически появятся здесь.
+                {t("Attach files in chat or create documents in Flow — they will automatically appear here.")}
               </p>
             </div>
           ) : (
@@ -3958,17 +5329,26 @@ function LibraryView({
                       <div className="relative mb-2.5 h-32 w-full overflow-hidden rounded-lg bg-black/40 border border-border/60">
                         <img src={file.dataUrl} alt={file.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300" />
                         <span className="absolute left-2 top-2 rounded bg-black/70 backdrop-blur-md px-1.5 py-0.5 text-[9px] font-bold text-white uppercase">
-                          {file.source === "generated" ? "ИИ Арт" : "Фото"}
+                          {file.source === "generated" ? t("AI Art") : t("Photo")}
                         </span>
                       </div>
                     ) : (
-                      <div className="mb-2.5 flex h-12 w-full items-center gap-3 rounded-lg bg-surface-elevated p-2.5 border border-border/60">
+                      <div
+                        onClick={() => {
+                          if (file.content !== undefined) {
+                            setPreviewFile({ name: file.name, content: file.content, source: file.chatTitle });
+                          }
+                        }}
+                        className={`mb-2.5 flex h-12 w-full items-center gap-3 rounded-lg bg-surface-elevated p-2.5 border border-border/60 ${file.content !== undefined ? "cursor-pointer hover:border-brand/40" : ""}`}
+                      >
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-brand/15 text-brand font-bold">
                           {file.type === "artifact" ? <Code2 className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-xs font-semibold">{file.name}</div>
-                          <div className="text-[10px] text-muted-foreground uppercase">{file.type}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase">
+                            {file.source === "flow" ? "FLOW" : file.type}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -3976,40 +5356,53 @@ function LibraryView({
                     <div className="min-w-0">
                       <div className="truncate text-xs font-semibold text-foreground leading-tight">{file.name}</div>
                       <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
-                        <span className="truncate max-w-[160px]" title={file.chatTitle}>💬 {file.chatTitle}</span>
+                        <span className="truncate max-w-[200px]" title={file.chatTitle}>
+                          {file.source === "flow" ? "⚡" : "💬"} {file.chatTitle}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   {/* Actions bar */}
                   <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-2.5">
-                    <button
-                      onClick={() => onOpenChat(file.chatId)}
-                      className="inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline cursor-pointer"
-                      title="Перейти в чат с этим файлом"
-                    >
-                      <MessageSquare className="h-3 w-3" />
-                      <span>В чат</span>
-                    </button>
+                    {file.source === "flow" ? (
+                      <button
+                        onClick={() => setPreviewFile({ name: file.name, content: file.content || "", source: file.chatTitle })}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline cursor-pointer"
+                        title={t("Open file contents")}
+                      >
+                        <FileText className="h-3 w-3" />
+                        <span>{t("Open")}</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onOpenChat(file.chatId)}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline cursor-pointer"
+                        title={t("Go to chat with this file")}
+                      >
+                        <MessageSquare className="h-3 w-3" />
+                        <span>{t("Go to chat")}</span>
+                      </button>
+                    )}
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => handleDownload(file)}
                         className="glass-button p-1.5 rounded-lg text-muted-foreground hover:text-foreground cursor-pointer"
-                        title="Скачать файл"
+                        title={t("Download file")}
                       >
                         <Download className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => handleRename(file)}
                         className="glass-button p-1.5 rounded-lg text-muted-foreground hover:text-foreground cursor-pointer"
-                        title="Переименовать"
+                        title={t("Rename")}
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => handleDelete(file)}
                         className="glass-button p-1.5 rounded-lg text-muted-foreground hover:text-destructive cursor-pointer"
-                        title="Удалить"
+                        title={t("Delete")}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -4116,18 +5509,18 @@ function LibraryView({
                 <button
                   onClick={() => onCreateEngineChatInProject(openProject.id)}
                   className="flex items-center gap-1.5 rounded-xl border border-[var(--brand-border)] bg-[var(--brand-soft)] hover:brightness-110 px-3 py-1.5 text-xs font-semibold text-[var(--brand)] transition-colors shadow-sm cursor-pointer"
-                  title="Создать код и Vercel-проект в Engine для этого проекта"
+                  title={t("Create code and a Vercel project in Engine for this project")}
                 >
                   <Cpu className="h-3.5 w-3.5" />
-                  <span>+ Engine-чат</span>
+                  <span>+ {t("Engine chat")}</span>
                 </button>
                 <button
                   onClick={() => onCreateRegularChatInProject(openProject.id)}
                   className="glass-button flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-foreground hover:border-brand/40 hover:text-brand cursor-pointer"
-                  title="Создать обычный диалог в этом проекте"
+                  title={t("Create a regular conversation in this project")}
                 >
                   <MessageSquare className="h-3.5 w-3.5" />
-                  <span>+ Чат</span>
+                  <span>+ {t("Chat")}</span>
                 </button>
                 <button
                   onClick={() => setAddOpen((v) => !v)}
@@ -4143,10 +5536,10 @@ function LibraryView({
               <div className="glass-card mt-3 rounded-lg border border-border/60 bg-background/60 p-2.5">
                 <div className="mb-2 flex items-center justify-between px-1">
                   <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    Выберите чат для добавления в проект
+                    {t("Select a chat to add to the project")}
                   </span>
                   <span className="text-[11px] text-muted-foreground/80">
-                    Доступно: {unassignedChats.length}
+                    {t("Available:")} {unassignedChats.length}
                   </span>
                 </div>
                 {unassignedChats.length === 0 ? (
@@ -4157,14 +5550,14 @@ function LibraryView({
                         onClick={() => onCreateEngineChatInProject(openProject.id)}
                         className="text-xs text-[var(--brand)] hover:underline font-semibold flex items-center gap-1 cursor-pointer"
                       >
-                        <Cpu className="h-3 w-3" /> + Создать Engine-чат
+                        <Cpu className="h-3 w-3" /> + {t("Create Engine chat")}
                       </button>
                       <span>•</span>
                       <button
                         onClick={() => onCreateRegularChatInProject(openProject.id)}
                         className="text-xs text-brand hover:underline font-semibold flex items-center gap-1 cursor-pointer"
                       >
-                        <MessageSquare className="h-3 w-3" /> + Создать обычный чат
+                        <MessageSquare className="h-3 w-3" /> + {t("Create regular chat")}
                       </button>
                     </div>
                   </div>
@@ -4237,7 +5630,7 @@ function LibraryView({
                     </button>
                     <button
                       onClick={() => { void onAssignChat(c.id, null); }}
-                      className="glass-button opacity-0 group-hover:opacity-100 p-1 rounded-md text-muted-foreground hover:text-brand cursor-pointer"
+                      className="glass-button opacity-70 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded-md text-muted-foreground hover:text-brand cursor-pointer"
                       title={t("Remove from project")}
                     >
                       <X className="h-3.5 w-3.5" />
@@ -4276,6 +5669,38 @@ function LibraryView({
               ))}
             </div>
           )}
+          <div className="mt-6 mb-2 flex items-center justify-between px-1">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("Flow files in project")}</div>
+            <div className="text-[10px] text-muted-foreground/70">
+              {allLibraryFiles.filter((f) => f.source === "flow" && f.projectId === openProject.id).length}
+            </div>
+          </div>
+          {allLibraryFiles.filter((f) => f.source === "flow" && f.projectId === openProject.id).length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/70 px-4 py-6 text-center text-[12px] text-muted-foreground">
+              {t("Files created by the Flow agent for this project will appear here.")}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {allLibraryFiles
+                .filter((f) => f.source === "flow" && f.projectId === openProject.id)
+                .map((file) => (
+                  <button
+                    key={file.id}
+                    onClick={() => setPreviewFile({ name: file.name, content: file.content || "", source: file.chatTitle })}
+                    className="glass-card group flex items-center gap-3 rounded-lg border border-border/70 bg-surface/40 px-3 py-2.5 text-left transition-colors hover:border-brand/40 cursor-pointer"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand/10 text-brand">
+                      <FileText className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] font-medium">{file.name}</div>
+                      <div className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{file.chatTitle}</div>
+                    </div>
+                    <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground group-hover:text-brand" />
+                  </button>
+                ))}
+            </div>
+          )}
         </div>
       )}
     </LockedShell>
@@ -4297,14 +5722,15 @@ function SavedView({
   onUnsave: (id: string) => void;
 }) {
   const t = useT();
+  const lang = useLang();
   const fmt = (iso: string) => {
     const d = new Date(iso);
     const diff = (Date.now() - d.getTime()) / 1000;
     if (diff < 60) return t("just now");
-    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-    if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d`;
-    return d.toLocaleDateString();
+    if (diff < 3600) return `${Math.floor(diff / 60)}${t("time.m")}`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}${t("time.h")}`;
+    if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}${t("time.d")}`;
+    return d.toLocaleDateString(localeFor(lang));
   };
   return (
     <LockedShell
@@ -4333,7 +5759,7 @@ function SavedView({
               <span className="shrink-0 text-[11px] text-muted-foreground">{fmt(c.updated_at)}</span>
               <button
                 onClick={() => onUnsave(c.id)}
-                className="glass-button shrink-0 p-1.5 rounded-lg text-muted-foreground hover:text-brand opacity-0 group-hover:opacity-100 transition-opacity"
+                className="glass-button shrink-0 p-1.5 rounded-lg text-muted-foreground hover:text-brand opacity-70 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                 title={t("Remove from Saved")}
               >
                 <X className="h-3.5 w-3.5" />
@@ -4404,13 +5830,13 @@ function DeployVercelModal({
         <div className="mt-3 space-y-4 text-xs leading-relaxed flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
           <div className="space-y-2">
             <div className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
-              Способ 1: Публикация через Vercel CLI (Рекомендуемый)
+              {t("Method 1: Deploy via Vercel CLI (Recommended)")}
             </div>
             <ol className="list-decimal pl-4 space-y-1.5 text-zinc-600 dark:text-zinc-300">
-              <li>Нажмите кнопку ниже, чтобы скачать архив с исходным кодом (ZIP).</li>
-              <li>Распакуйте архив на вашем компьютере и откройте терминал в этой папке.</li>
+              <li>{t("Click the button below to download the source code archive (ZIP).")}</li>
+              <li>{t("Extract the archive on your computer and open a terminal in that folder.")}</li>
               <li>
-                Запустите команду деплоя:
+                {t("Run the deploy command:")}
                 <code className="ml-1 rounded bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 font-mono text-[var(--brand)]">
                   npx vercel --prod
                 </code>
@@ -4420,12 +5846,12 @@ function DeployVercelModal({
 
           <div className="space-y-2 border-t border-zinc-200 dark:border-white/10 pt-3">
             <div className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
-              Способ 2: Публикация через GitHub + Vercel
+              {t("Method 2: Deploy via GitHub + Vercel")}
             </div>
             <ol className="list-decimal pl-4 space-y-1.5 text-zinc-600 dark:text-zinc-300">
-              <li>Загрузите исходные файлы проекта в новый репозиторий GitHub.</li>
-              <li>Перейдите на <a href="https://vercel.com/new" target="_blank" rel="noreferrer" className="text-[var(--brand)] underline font-medium">vercel.com/new</a> и импортируйте ваш репозиторий.</li>
-              <li>Vercel автоматически соберет и опубликует ваш проект с постоянным URL!</li>
+              <li>{t("Upload the project source files to a new GitHub repository.")}</li>
+              <li>{t("Go to")} <a href="https://vercel.com/new" target="_blank" rel="noreferrer" className="text-[var(--brand)] underline font-medium">vercel.com/new</a> {t("and import your repository.")}</li>
+              <li>{t("Vercel will automatically build and deploy your project with a permanent URL!")}</li>
             </ol>
           </div>
 
@@ -4437,7 +5863,7 @@ function DeployVercelModal({
                 className="flex items-center gap-1 text-[11px] font-medium text-[var(--brand)] hover:underline cursor-pointer"
               >
                 {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                <span>{copied ? "Скопировано" : "Скопировать vercel.json"}</span>
+                <span>{copied ? t("Copied") : t("Copy vercel.json")}</span>
               </button>
             </div>
             <pre className="rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-zinc-900 p-3 font-mono text-[11px] text-zinc-800 dark:text-zinc-200 overflow-x-auto">
@@ -4460,7 +5886,7 @@ function DeployVercelModal({
             className="flex items-center gap-2 rounded-xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 px-4 py-2 text-xs font-bold text-white transition-all shadow-md cursor-pointer disabled:opacity-50"
           >
             {isZipping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            <span>Скачать ZIP для Vercel</span>
+            <span>{t("Download ZIP for Vercel")}</span>
           </button>
         </div>
       </div>
@@ -4476,19 +5902,19 @@ export default function App() {
   return (
     <div style={{ padding: '2rem', fontFamily: 'sans-serif', background: '#09090b', color: '#f4f4f5', minHeight: '100vh' }}>
       <h1 style={{ color: '#ef4444', fontSize: '2.25rem', fontWeight: 800, margin: 0 }}>IGseek Engine Studio ✦</h1>
-      <p style={{ color: '#a1a1aa', marginTop: '0.5rem' }}>Готовое веб-приложение для публикации на Vercel</p>
+      <p style={{ color: '#a1a1aa', marginTop: '0.5rem' }}>Ready-to-deploy web app for Vercel</p>
       
       <div style={{ marginTop: '2rem', padding: '1.5rem', background: '#18181b', borderRadius: '1rem', border: '1px solid #27272a' }}>
         <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#ffffff' }}>🚀 App Studio</h3>
         <p style={{ color: '#71717a', fontSize: '0.875rem', marginTop: '0.5rem' }}>
-          Опишите задачу в чате или редактируйте файлы во вкладке «Файлы», а затем нажмите «Деплой»!
+          Describe your task in chat or edit files in the Files tab, then click Deploy!
         </p>
       </div>
     </div>
   );
 }`,
   "index.html": `<!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -4528,29 +5954,33 @@ export default function App() {
 }`,
   "README.md": `# IGseek Engine Vercel App
 
-Проект сгенерирован в IGseek Code Engine.
+Project generated in IGseek Code Engine.
 
-## Инструкция по деплою на Vercel
+## Vercel Deployment Instructions
 
-1. Скачайте .zip архив проекта.
-2. Откройте терминал в папке проекта и запустите:
+1. Download the project .zip archive.
+2. Open a terminal in the project folder and run:
    \`\`\`bash
    npm i -g vercel
    vercel --prod
    \`\`\`
-3. Готово! Приложение опубликовано в сети.`
+3. Done! Your app is live.`
 };
 
 const INITIAL_ENGINE_MESSAGES: Array<{ id: string; role: "user" | "assistant"; content: string; filesUpdated?: string[] }> = [
   {
     id: "init",
     role: "assistant",
-    content: "Привет! Я IGseek Code Engine. Опишите проект — я создам готовую Vercel-сборку и размещу исходники во вкладке **Файлы**.",
+    content: "Hi! I'm IGseek Code Engine. Describe your project — I'll generate a ready-to-deploy Vercel build and place the source files in the **Files** tab.",
   },
 ];
 
 /* ---------- Engine (public, no auth) ---------- */
 function EngineView({
+  cloudUid,
+  usageUid = "guest",
+  model = "instinct",
+  agent = "universal",
   activeChatId,
   onActiveChatChange,
   onGeneratingChange,
@@ -4561,6 +5991,10 @@ function EngineView({
   onAssignChat,
   onNavigateToLibrary,
 }: {
+  cloudUid?: string | null;
+  usageUid?: string;
+  model?: ModelId;
+  agent?: AgentId;
   activeChatId?: string | null;
   onActiveChatChange?: (id: string | null) => void;
   onGeneratingChange?: (id: string, isGenerating: boolean) => void;
@@ -4580,6 +6014,11 @@ function EngineView({
   onNavigateToLibrary?: () => void;
 }) {
   const t = useT();
+  const lang = useLang();
+  const { usage: promptUsage, limits: promptLimits } = usePromptLimits(usageUid);
+  const engineUsed = promptUsage.engine;
+  const engineLimit = promptLimits.engine;
+  const engineExhausted = engineUsed >= engineLimit;
   const [hasStarted, setHasStarted] = useState(false);
   const [engineTab, setEngineTab] = useState<"chat" | "preview" | "files">("chat");
   const [activeFile, setActiveFile] = useState("src/App.tsx");
@@ -4592,6 +6031,8 @@ function EngineView({
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
   const [newFileName, setNewFileName] = useState("");
   const [isAddingFile, setIsAddingFile] = useState(false);
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
+  const [editingEngineMsgId, setEditingEngineMsgId] = useState<string | null>(null);
 
   // Project selector state
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -4600,16 +6041,34 @@ function EngineView({
   const [isCreatingProject, setIsCreatingProject] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const engineRecognitionRef = useRef<any>(null);
+  useEffect(() => {
+    return () => {
+      try {
+        engineRecognitionRef.current?.stop();
+      } catch {}
+    };
+  }, []);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const activeEngineJobsRef = useRef<Map<string, AbortController>>(new Map());
+  const activeEngineReceiptRef = useRef<PromptReceipt | null>(null);
+  const activeEngineJobsRef = useRef<Map<string, { controller: AbortController; receipt: PromptReceipt | null }>>(new Map());
   const activeChatIdRef = useRef<string | null>(activeChatId ?? null);
+  const cloudSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     activeChatIdRef.current = activeChatId ?? null;
   }, [activeChatId]);
 
   const stopGenerating = () => {
-    if (activeChatId && activeEngineJobsRef.current.has(activeChatId)) {
-      activeEngineJobsRef.current.get(activeChatId)?.abort();
+    const job = activeChatId ? activeEngineJobsRef.current.get(activeChatId) : undefined;
+    const receipt = job?.receipt ?? activeEngineReceiptRef.current;
+    if (isWithinCancelRefundWindow(receipt) && refundPrompt(receipt)) {
+      toast.info(t("Request cancelled within 5s — prompt refunded."));
+    }
+    if (activeEngineReceiptRef.current === receipt) {
+      activeEngineReceiptRef.current = null;
+    }
+    if (activeChatId && job) {
+      job.controller.abort();
       activeEngineJobsRef.current.delete(activeChatId);
       onGeneratingChange?.(activeChatId, false);
     } else {
@@ -4649,6 +6108,17 @@ function EngineView({
     setProjectMenuOpen(false);
     if (activeChatId) {
       await onAssignChat?.(activeChatId, projectId);
+      if (cloudUid) {
+        const title = chats.find((c) => c.id === activeChatId)?.title || t("Engine project");
+        void saveCloudEngineProject(cloudUid, {
+          id: activeChatId,
+          title,
+          projectId,
+          activeFile,
+          files,
+          chatMessages,
+        });
+      }
     }
   };
 
@@ -4662,6 +6132,17 @@ function EngineView({
         setSelectedProjectId(created.id);
         if (activeChatId) {
           await onAssignChat?.(activeChatId, created.id);
+          if (cloudUid) {
+            const title = chats.find((c) => c.id === activeChatId)?.title || t("Engine project");
+            void saveCloudEngineProject(cloudUid, {
+              id: activeChatId,
+              title,
+              projectId: created.id,
+              activeFile,
+              files,
+              chatMessages,
+            });
+          }
         }
       }
       setNewProjectName("");
@@ -4672,12 +6153,74 @@ function EngineView({
   };
 
   // Chat messages history inside Engine Studio
-  const [chatMessages, setChatMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string; filesUpdated?: string[] }>>(INITIAL_ENGINE_MESSAGES);
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string; filesUpdated?: string[]; limitCooldown?: LimitCooldownPayload }>>(INITIAL_ENGINE_MESSAGES);
 
   // Project file system store
   const [files, setFiles] = useState<Record<string, string>>(INITIAL_ENGINE_FILES);
 
-  // Load project when activeChatId changes
+  const scheduleCloudEngineSave = (
+    chatId: string,
+    nextFiles: Record<string, string>,
+    nextMessages: Array<{ id: string; role: "user" | "assistant"; content: string; filesUpdated?: string[]; limitCooldown?: LimitCooldownPayload }>,
+    nextActiveFile: string,
+    immediate = false
+  ) => {
+    if (!cloudUid || !chatId) return;
+    const title = chats.find((c) => c.id === chatId)?.title || t("Engine project");
+    const runSave = () => {
+      void saveCloudEngineProject(cloudUid, {
+        id: chatId,
+        title,
+        projectId: selectedProjectId,
+        activeFile: nextActiveFile,
+        files: nextFiles,
+        chatMessages: nextMessages,
+      });
+    };
+    if (cloudSaveTimerRef.current) {
+      clearTimeout(cloudSaveTimerRef.current);
+      cloudSaveTimerRef.current = null;
+    }
+    if (immediate) {
+      runSave();
+    } else {
+      cloudSaveTimerRef.current = setTimeout(runSave, 600);
+    }
+  };
+
+  const updateEngineMessageContent = (msgId: string, nextContent: string) => {
+    const targetMsg = chatMessages.find((m) => m.id === msgId);
+    if (!targetMsg || targetMsg.role !== "user") return;
+    const nextChatMsgs = chatMessages.map((m) =>
+      m.id === msgId ? { ...m, content: nextContent } : m,
+    );
+    setChatMessages(nextChatMsgs);
+    if (activeChatId) {
+      const now = new Date().toISOString();
+      try {
+        const raw = window.localStorage.getItem(`igseek:engine_proj_${activeChatId}`);
+        const parsed = raw ? JSON.parse(raw) : {};
+        window.localStorage.setItem(
+          `igseek:engine_proj_${activeChatId}`,
+          JSON.stringify({ ...parsed, files, chatMessages: nextChatMsgs, activeFile, updatedAt: now }),
+        );
+      } catch {}
+      const title =
+        chats.find((c) => c.id === activeChatId)?.title || t("Engine project");
+      onSaveEngineChat?.(
+        activeChatId,
+        title,
+        nextContent,
+        nextContent,
+        files,
+        nextChatMsgs,
+        selectedProjectId,
+      );
+    }
+    toast.success(t("Message text updated"));
+  };
+
+  // Load project when activeChatId or cloudUid changes (local cache + Firebase Firestore sync)
   useEffect(() => {
     if (!activeChatId) {
       setHasStarted(false);
@@ -4688,27 +6231,76 @@ function EngineView({
       return;
     }
     // Если этот проект сейчас генерируется в фоне — восстанавливаем состояние генерации!
-    if (activeEngineJobsRef.current.has(activeChatId)) {
+    const existingEngineJob = activeEngineJobsRef.current.get(activeChatId);
+    if (existingEngineJob) {
       setIsGenerating(true);
-      abortControllerRef.current = activeEngineJobsRef.current.get(activeChatId) ?? null;
+      abortControllerRef.current = existingEngineJob.controller;
+      activeEngineReceiptRef.current = existingEngineJob.receipt;
     } else {
       setIsGenerating(false);
       abortControllerRef.current = null;
+      activeEngineReceiptRef.current = null;
     }
+    let localParsed: any = null;
     try {
       const raw = window.localStorage.getItem(`igseek:engine_proj_${activeChatId}`);
       if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed.files && typeof parsed.files === "object") {
-          setFiles(parsed.files);
+        localParsed = JSON.parse(raw);
+        if (localParsed.files && typeof localParsed.files === "object") {
+          setFiles(localParsed.files);
         }
-        if (Array.isArray(parsed.chatMessages) && parsed.chatMessages.length > 0) {
-          setChatMessages(parsed.chatMessages);
+        if (localParsed.activeFile && typeof localParsed.activeFile === "string") {
+          setActiveFile(localParsed.activeFile);
+        }
+        if (Array.isArray(localParsed.chatMessages) && localParsed.chatMessages.length > 0) {
+          setChatMessages(localParsed.chatMessages);
           setHasStarted(true);
         }
       }
     } catch {}
-  }, [activeChatId]);
+
+    let cancelled = false;
+    if (cloudUid) {
+      void loadCloudEngineProject(cloudUid, activeChatId).then((cloudProj) => {
+        if (cancelled || !cloudProj || activeChatIdRef.current !== activeChatId) return;
+        const localTime = localParsed?.updatedAt ? new Date(localParsed.updatedAt).getTime() : 0;
+        const cloudTime = cloudProj.updatedAt ? new Date(cloudProj.updatedAt).getTime() : 0;
+        if (!localParsed || !localTime || cloudTime >= localTime) {
+          if (cloudProj.files && Object.keys(cloudProj.files).length > 0) {
+            setFiles(cloudProj.files);
+            if (cloudProj.activeFile && cloudProj.files[cloudProj.activeFile] !== undefined) {
+              setActiveFile(cloudProj.activeFile);
+            } else {
+              const firstKey = Object.keys(cloudProj.files)[0];
+              if (firstKey) setActiveFile(firstKey);
+            }
+          }
+          if (Array.isArray(cloudProj.chatMessages) && cloudProj.chatMessages.length > 0) {
+            setChatMessages(cloudProj.chatMessages);
+            setHasStarted(true);
+          }
+          if (cloudProj.projectId !== undefined) {
+            setSelectedProjectId(cloudProj.projectId);
+          }
+          try {
+            window.localStorage.setItem(
+              `igseek:engine_proj_${activeChatId}`,
+              JSON.stringify({
+                files: cloudProj.files,
+                chatMessages: cloudProj.chatMessages,
+                activeFile: cloudProj.activeFile,
+                title: cloudProj.title,
+                updatedAt: cloudProj.updatedAt,
+              })
+            );
+          } catch {}
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChatId, cloudUid]);
 
   useEffect(() => {
     if (engineTab === "chat" && hasStarted) {
@@ -4734,7 +6326,7 @@ function EngineView({
       a.remove();
       URL.revokeObjectURL(url);
     } catch {
-      alert("Ошибка экспорта ZIP");
+      toast.error(t("ZIP export failed"));
     } finally {
       setIsZipping(false);
     }
@@ -4744,40 +6336,51 @@ function EngineView({
     const trimmed = newFileName.trim();
     if (!trimmed) return;
     if (files[trimmed]) {
-      alert("Файл с таким именем уже существует!");
+      toast.error(t("A file with this name already exists!"));
       return;
     }
-    const updated = { ...files, [trimmed]: "// Новый файл\n" };
+    const updated = { ...files, [trimmed]: "// New file\n" };
     setFiles(updated);
     setActiveFile(trimmed);
     setNewFileName("");
     setIsAddingFile(false);
     if (activeChatId) {
+      const now = new Date().toISOString();
       try {
         const raw = window.localStorage.getItem(`igseek:engine_proj_${activeChatId}`);
         const parsed = raw ? JSON.parse(raw) : {};
-        window.localStorage.setItem(`igseek:engine_proj_${activeChatId}`, JSON.stringify({ ...parsed, files: updated }));
+        window.localStorage.setItem(
+          `igseek:engine_proj_${activeChatId}`,
+          JSON.stringify({ ...parsed, files: updated, activeFile: trimmed, updatedAt: now })
+        );
       } catch {}
+      scheduleCloudEngineSave(activeChatId, updated, chatMessages, trimmed, true);
     }
   };
 
   const handleDeleteFile = (fileName: string) => {
     if (Object.keys(files).length <= 1) {
-      alert("Нельзя удалить единственный файл проекта!");
+      toast.error(t("Cannot delete the only project file!"));
       return;
     }
-    if (confirm(`Удалить файл ${fileName}?`)) {
+    if (confirm(`${t("Delete file")} ${fileName}?`)) {
       const next = { ...files };
       delete next[fileName];
       setFiles(next);
       const remaining = Object.keys(next);
-      if (remaining.length) setActiveFile(remaining[0]);
+      const nextActive = remaining.length ? remaining[0] : activeFile;
+      if (remaining.length) setActiveFile(nextActive);
       if (activeChatId) {
+        const now = new Date().toISOString();
         try {
           const raw = window.localStorage.getItem(`igseek:engine_proj_${activeChatId}`);
           const parsed = raw ? JSON.parse(raw) : {};
-          window.localStorage.setItem(`igseek:engine_proj_${activeChatId}`, JSON.stringify({ ...parsed, files: next }));
+          window.localStorage.setItem(
+            `igseek:engine_proj_${activeChatId}`,
+            JSON.stringify({ ...parsed, files: next, activeFile: nextActive, updatedAt: now })
+          );
         } catch {}
+        scheduleCloudEngineSave(activeChatId, next, chatMessages, nextActive, true);
       }
     }
   };
@@ -4785,6 +6388,32 @@ function EngineView({
   const generateWithAI = async (customPrompt?: string) => {
     const targetPrompt = (customPrompt ?? prompt).trim();
     if (!targetPrompt || isGenerating) return;
+    if (!canUsePrompt("engine", usageUid)) {
+      const resetAt = ensureScopeResetTimestamp("engine", usageUid);
+      const userMsgId = `user-${Date.now()}`;
+      const limitMsgId = `limit-${Date.now()}`;
+      setHasStarted(true);
+      setEngineTab("chat");
+      setChatMessages((prev) => [
+        ...prev,
+        { id: userMsgId, role: "user" as const, content: targetPrompt },
+        {
+          id: limitMsgId,
+          role: "assistant" as const,
+          content: "",
+          limitCooldown: {
+            scope: "engine",
+            used: engineLimit,
+            limit: engineLimit,
+            resetAt,
+          },
+        },
+      ]);
+      if (!customPrompt) setPrompt("");
+      return;
+    }
+    const { receipt } = consumePrompt("engine", usageUid);
+    activeEngineReceiptRef.current = receipt;
 
     setHasStarted(true);
     setIsGenerating(true);
@@ -4802,28 +6431,28 @@ function EngineView({
       onActiveChatChange?.(currentChatId);
       activeChatIdRef.current = currentChatId;
     }
-    activeEngineJobsRef.current.set(currentChatId, controller);
+    activeEngineJobsRef.current.set(currentChatId, { controller, receipt });
     onGeneratingChange?.(currentChatId, true);
 
     try {
-      const systemInstruction = `Ты — экспертный AI Code Engine в IGseek. Твоя задача — сгенерировать готовое React-приложение для Vercel.
-КРИТИЧЕСКИ ВАЖНО:
-1. В тексте ответа не пиши гигантские файлы кода напрямую!
-2. Вся коммуникация в чате должна состоять из краткого отчета, объяснения, что было сделано или исправлено.
-3. Код каждого файла помещай в спец-блоки с именем файла в заголовке, например:
+      const systemInstruction = `You are an expert AI Code Engine in IGseek. Your task is to generate a complete React app ready for Vercel.
+Respond to the user in their language, keep chat explanations concise, and follow these strict rules:
+1. Do NOT paste huge source files directly into regular prose in chat!
+2. Keep chat text to a short summary explaining what was built or updated.
+3. Put each file's code in special fenced blocks with the file path in the info string, for example:
 \`\`\`file:src/App.tsx
 import React from 'react';
 export default function App() { ... }
 \`\`\`
-или
+or
 \`\`\`file:styles.css
 /* CSS code */
 \`\`\`
-или
+or
 \`\`\`file:vercel.json
 { "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }
 \`\`\`
-Наш Engine Studio автоматически распарсит эти блоки и запишет файлы напрямую в файловую систему проекта.`;
+Engine Studio automatically parses these blocks and writes files directly into the project workspace.`;
 
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -4831,20 +6460,23 @@ export default function App() { ... }
         body: JSON.stringify({
           messages: [
             { role: "system", content: systemInstruction },
-            ...newChatMsgs.map((m) => ({ role: m.role, content: m.content })),
+            ...newChatMsgs.filter((m) => !m.limitCooldown).map((m) => ({ role: m.role, content: m.content })),
           ],
           reasoning,
+          model,
+          agent,
+          workspace: "engine",
         }),
         signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
-        toast.error("Ошибка запроса к AI Engine: HTTP " + res.status);
+        toast.error(`${t("AI Engine request failed: HTTP")} ${res.status}`);
         return;
       }
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("text/event-stream")) {
-        toast.error("Сервер не вернул поток событий. Проверьте деплой /api/chat.");
+        toast.error(t("Server did not return an event stream. Check /api/chat deployment."));
         return;
       }
 
@@ -4892,7 +6524,7 @@ export default function App() { ... }
         // Clean explanatory text for chat display (removing the file blocks)
         let cleanText = fullText.replace(/```file:[\s\S]*?```/g, "").trim();
         if (!cleanText) {
-          cleanText = "✅ Код проекта успешно сгенерирован и записан в файлы! Все исходники доступны во вкладке **Файлы**.";
+          cleanText = "✅ " + t("Code generated successfully! Updated files available in Files tab.");
         }
 
         const nextChatMsgs = [
@@ -4935,7 +6567,7 @@ export default function App() { ... }
             {
               id: `stop-${Date.now()}`,
               role: "assistant",
-              content: "⏹ Создание остановлено пользователем.",
+              content: "⏹ " + t("Generation stopped by user."),
             },
           ]);
         }
@@ -4946,7 +6578,7 @@ export default function App() { ... }
             {
               id: `err-${Date.now()}`,
               role: "assistant",
-              content: "Произошла ошибка при генерации. Попробуйте еще раз.",
+              content: t("An error occurred during generation. Please try again."),
             },
           ]);
         }
@@ -4954,6 +6586,9 @@ export default function App() { ... }
     } finally {
       activeEngineJobsRef.current.delete(currentChatId);
       onGeneratingChange?.(currentChatId, false);
+      if (activeEngineReceiptRef.current === receipt) {
+        activeEngineReceiptRef.current = null;
+      }
       if (activeChatIdRef.current === currentChatId) {
         abortControllerRef.current = null;
         setIsGenerating(false);
@@ -5019,7 +6654,7 @@ export default function App() { ... }
         >
           <Folder className="h-3.5 w-3.5 text-[var(--brand)] shrink-0" />
           <span className="max-w-[140px] truncate">
-            {currentProj ? currentProj.name : "В проект (Library)"}
+            {currentProj ? currentProj.name : t("Add to project (Library)")}
           </span>
           <ChevronDown className="h-3 w-3 opacity-60 shrink-0" />
         </button>
@@ -5027,14 +6662,14 @@ export default function App() { ... }
         {projectMenuOpen && (
           <div className="absolute left-0 mt-2 w-64 rounded-2xl border border-zinc-200 dark:border-white/15 bg-white dark:bg-[#18181b] p-2.5 shadow-2xl z-50 text-zinc-900 dark:text-white backdrop-blur-xl">
             <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 border-b border-zinc-100 dark:border-white/5 flex items-center justify-between">
-              <span>Проекты (Library)</span>
+              <span>{t("Projects (Library)")}</span>
               {onNavigateToLibrary && (
                 <button
                   type="button"
                   onClick={() => { setProjectMenuOpen(false); onNavigateToLibrary(); }}
                   className="text-[var(--brand)] hover:underline cursor-pointer lowercase"
                 >
-                  все проекты →
+                  {t("all projects →")}
                 </button>
               )}
             </div>
@@ -5049,7 +6684,7 @@ export default function App() { ... }
                     : "text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/5"
                 }`}
               >
-                <span>Без проекта</span>
+                <span>{t("No project")}</span>
                 {!selectedProjectId && <Check className="h-3 w-3 text-[var(--brand)]" />}
               </button>
 
@@ -5084,7 +6719,7 @@ export default function App() { ... }
                       void handleCreateProjectInline();
                     }
                   }}
-                  placeholder="Новый проект…"
+                  placeholder={t("New project…")}
                   className="flex-1 rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-50 dark:bg-zinc-800 px-2.5 py-1 text-xs outline-none focus:border-[var(--brand)]"
                 />
                 <button
@@ -5105,7 +6740,7 @@ export default function App() { ... }
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto px-2">
-      {/* Vercel Deploy Modal */}
+      {/* Deploy & LongText Modals */}
       <AnimatePresence>
         {deployModalOpen && (
           <DeployVercelModal
@@ -5116,6 +6751,47 @@ export default function App() { ... }
           />
         )}
       </AnimatePresence>
+      {(() => {
+        const editingEngineMsg = editingEngineMsgId
+          ? chatMessages.find((m) => m.id === editingEngineMsgId) || null
+          : null;
+        const isEditingUserEngineMsg = editingEngineMsg?.role === "user";
+        return (
+          <>
+            <LongTextModal
+              isOpen={promptModalOpen}
+              title={t("Prompt for Engine")}
+              subtitle={t("Task draft")}
+              initialText={prompt}
+              onClose={() => setPromptModalOpen(false)}
+              onSave={(next) => {
+                setPrompt(next);
+                toast.success(t("Prompt text updated"));
+              }}
+            />
+            <LongTextModal
+              isOpen={Boolean(editingEngineMsg)}
+              title={
+                isEditingUserEngineMsg
+                  ? t("Engine prompt")
+                  : t("Engine reply")
+              }
+              initialText={
+                editingEngineMsg?.id === "init"
+                  ? t(editingEngineMsg.content)
+                  : editingEngineMsg?.content || ""
+              }
+              readOnly={!isEditingUserEngineMsg}
+              onClose={() => setEditingEngineMsgId(null)}
+              onSave={
+                editingEngineMsg && isEditingUserEngineMsg
+                  ? (next) => updateEngineMessageContent(editingEngineMsg.id, next)
+                  : undefined
+              }
+            />
+          </>
+        );
+      })()}
 
       {/* ================= VIEW 1: WELCOMING START SCREEN (BEFORE CREATION STARTS) ================= */}
       {!hasStarted ? (
@@ -5160,6 +6836,15 @@ export default function App() { ... }
                 className="w-full resize-none bg-transparent px-1 py-1 text-[15px] text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
               />
 
+              {isLongTextOverLimit(prompt) && (
+                <div className="flex justify-end">
+                  <LongTextButton
+                    onClick={() => setPromptModalOpen(true)}
+                    linesCount={countTextLines(prompt)}
+                  />
+                </div>
+              )}
+
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-100 dark:border-white/5">
                 <div className="flex items-center gap-2">
                   <button
@@ -5169,7 +6854,7 @@ export default function App() { ... }
                       input.type = "file";
                       input.onchange = (e) => {
                         const file = (e.target as HTMLInputElement).files?.[0];
-                        if (file) setPrompt((prev) => `${prev}\n[Файл: ${file.name}]`);
+                        if (file) setPrompt((prev) => `${prev}\n[${t("File")}: ${file.name}]`);
                       };
                       input.click();
                     }}
@@ -5181,15 +6866,47 @@ export default function App() { ... }
 
                   <button
                     type="button"
-                    onClick={() => setIsRecording((v) => !v)}
+                    onClick={() => {
+                      const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                      if (!SR) { toast.error(t("Voice input is not supported in this browser")); return; }
+                      if (isRecording) {
+                        try { engineRecognitionRef.current?.stop(); } catch {}
+                        setIsRecording(false);
+                        return;
+                      }
+                      const rec = new SR();
+                      rec.lang = localeFor(lang);
+                      rec.continuous = true;
+                      rec.interimResults = true;
+                      let base = prompt;
+                      rec.onresult = (ev: any) => {
+                        let finalTxt = "";
+                        let interim = "";
+                        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+                          const r = ev.results[i];
+                          if (r.isFinal) finalTxt += r[0].transcript;
+                          else interim += r[0].transcript;
+                        }
+                        if (finalTxt) {
+                          base = (base ? base + " " : "") + finalTxt.trim();
+                          setPrompt(base);
+                        } else if (interim) {
+                          setPrompt((base ? base + " " : "") + interim);
+                        }
+                      };
+                      rec.onerror = () => setIsRecording(false);
+                      rec.onend = () => setIsRecording(false);
+                      engineRecognitionRef.current = rec;
+                      try { rec.start(); setIsRecording(true); } catch { setIsRecording(false); }
+                    }}
                     className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors cursor-pointer ${
                       isRecording
-                        ? "border-[var(--brand)] bg-[var(--brand-soft)] text-[var(--brand)]"
+                        ? "border-[var(--brand)] bg-[var(--brand-soft)] text-[var(--brand)] animate-pulse"
                         : "border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white"
                     }`}
-                    title={t("Voice")}
+                    title={isRecording ? t("Stop recording") : t("Voice")}
                   >
-                    <Mic className="h-4 w-4" />
+                    {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                   </button>
 
                   <button
@@ -5206,6 +6923,18 @@ export default function App() { ... }
                   </button>
                 </div>
 
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-mono font-semibold ${
+                      engineExhausted
+                        ? "border-red-500/40 bg-red-500/10 text-red-500"
+                        : "border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-muted-foreground"
+                    }`}
+                    title={t("Prompts used")}
+                  >
+                    {engineUsed}/{engineLimit}
+                  </span>
+
                 {isGenerating ? (
                   <button
                     type="button"
@@ -5219,12 +6948,13 @@ export default function App() { ... }
                   <button
                     type="submit"
                     disabled={!prompt.trim()}
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md active:scale-95 disabled:opacity-30 cursor-pointer"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                     title={t("Send")}
                   >
                     <ArrowUp className="h-4 w-4" />
                   </button>
                 )}
+                </div>
               </div>
             </form>
 
@@ -5350,21 +7080,40 @@ export default function App() { ... }
                     key={msg.id}
                     className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
                   >
+                    {msg.limitCooldown ? (
+                      <LimitCooldownCard
+                        scope={msg.limitCooldown.scope}
+                        used={msg.limitCooldown.used}
+                        limit={msg.limitCooldown.limit}
+                        resetAt={msg.limitCooldown.resetAt}
+                      />
+                    ) : (
                     <div
-                      className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                      className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed break-words [overflow-wrap:anywhere] ${
                         msg.role === "user"
                           ? "bg-black text-white dark:bg-zinc-800 dark:text-white"
                           : "bg-zinc-100 dark:bg-white/5 border border-zinc-200 dark:border-white/10 text-zinc-900 dark:text-zinc-100"
                       }`}
                     >
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      <EngineMarkdown content={msg.id === "init" ? t(msg.content) : msg.content} />
+
+                      {isLongTextOverLimit(msg.id === "init" ? t(msg.content) : msg.content) && (
+                        <div className="mt-2.5 flex justify-end">
+                          <LongTextButton
+                            variant={msg.role === "user" ? "user-bubble" : "default"}
+                            label={msg.role === "user" ? t("Full text & edit") : t("Full text")}
+                            onClick={() => setEditingEngineMsgId(msg.id)}
+                            linesCount={countTextLines(msg.id === "init" ? t(msg.content) : msg.content)}
+                          />
+                        </div>
+                      )}
 
                       {/* Summary of files updated */}
                       {msg.filesUpdated && msg.filesUpdated.length > 0 && (
                         <div className="mt-3 pt-2.5 border-t border-zinc-200 dark:border-white/10 flex flex-col gap-2">
                           <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                             <Check className="h-3.5 w-3.5" />
-                            <span>Обновлены файлы: {msg.filesUpdated.join(", ")}</span>
+                            <span>{t("Updated files:")} {msg.filesUpdated.join(", ")}</span>
                           </div>
                           <div className="flex items-center gap-2 pt-1">
                             <button
@@ -5392,18 +7141,27 @@ export default function App() { ... }
                         </div>
                       )}
                     </div>
+                    )}
                   </div>
                 ))}
                 {isGenerating && (
                   <div className="flex items-center gap-2 text-xs text-zinc-500 p-2">
                     <Loader2 className="h-4 w-4 animate-spin text-[var(--brand)]" />
-                    <span>DeepSeek генерирует Vercel-проект…</span>
+                    <span>{t("Generating Vercel project…")}</span>
                   </div>
                 )}
                 <div ref={chatEndRef} />
               </div>
 
               {/* Chat Input Bar (FIXED AT BOTTOM) */}
+              {isLongTextOverLimit(prompt) && (
+                <div className="shrink-0 flex justify-end">
+                  <LongTextButton
+                    onClick={() => setPromptModalOpen(true)}
+                    linesCount={countTextLines(prompt)}
+                  />
+                </div>
+              )}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -5411,12 +7169,29 @@ export default function App() { ... }
                 }}
                 className="shrink-0 relative flex items-center gap-2 rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 shadow-lg backdrop-blur-xl"
               >
-                <input
+                <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Опишите доработки или изменения в проекте…"
-                  className="flex-1 bg-transparent px-3 py-1.5 text-sm text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void generateWithAI();
+                    }
+                  }}
+                  rows={1}
+                  placeholder={t("Describe project changes or improvements…")}
+                  className="flex-1 max-h-28 resize-none bg-transparent px-3 py-1.5 text-sm text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none"
                 />
+                <span
+                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold shrink-0 ${
+                    engineExhausted
+                      ? "border-red-500/40 bg-red-500/10 text-red-500"
+                      : "border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-muted-foreground"
+                  }`}
+                  title={t("Prompts used")}
+                >
+                  {engineUsed}/{engineLimit}
+                </span>
                 {isGenerating ? (
                   <button
                     type="button"
@@ -5431,7 +7206,7 @@ export default function App() { ... }
                     type="submit"
                     disabled={!prompt.trim()}
                     title={t("Send")}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white disabled:opacity-30 active:scale-95 cursor-pointer"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white disabled:opacity-30 disabled:cursor-not-allowed active:scale-95 cursor-pointer"
                   >
                     <ArrowUp className="h-3.5 w-3.5" />
                   </button>
@@ -5447,7 +7222,7 @@ export default function App() { ... }
                 <div className="flex items-center gap-2">
                   <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                   <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                    Live Preview (Vercel Build)
+                    {t("Live Preview")}
                   </span>
                 </div>
 
@@ -5460,7 +7235,7 @@ export default function App() { ... }
                       }`}
                     >
                       <Monitor className="h-3.5 w-3.5" />
-                      <span>Desktop</span>
+                      <span>{t("Desktop")}</span>
                     </button>
                     <button
                       onClick={() => setPreviewDevice("mobile")}
@@ -5469,7 +7244,7 @@ export default function App() { ... }
                       }`}
                     >
                       <Smartphone className="h-3.5 w-3.5" />
-                      <span>Mobile</span>
+                      <span>{t("Mobile")}</span>
                     </button>
                   </div>
 
@@ -5493,7 +7268,7 @@ export default function App() { ... }
                   }`}
                 >
                   <iframe
-                    title="Engine Live Preview"
+                    title={t("Live preview")}
                     srcDoc={previewHtml}
                     className="h-full w-full bg-zinc-950 border-0"
                   />
@@ -5509,7 +7284,7 @@ export default function App() { ... }
                 <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-white/10">
                   <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
                     <Folder className="h-3.5 w-3.5 text-[var(--brand)]" />
-                    <span>Файлы проекта</span>
+                    <span>{t("Project files")}</span>
                   </span>
                   <button
                     onClick={() => setIsAddingFile((v) => !v)}
@@ -5534,7 +7309,7 @@ export default function App() { ... }
                       onClick={handleAddNewFile}
                       className="rounded-lg bg-black dark:bg-[var(--brand)] px-2 py-1 text-xs text-white cursor-pointer"
                     >
-                      ОК
+                      {t("OK")}
                     </button>
                   </div>
                 )}
@@ -5578,7 +7353,7 @@ export default function App() { ... }
                     className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 py-2 text-xs font-semibold text-zinc-800 dark:text-zinc-200 transition-colors cursor-pointer"
                   >
                     {isZipping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                    <span>Экспорт .zip Vercel</span>
+                    <span>{t("Export .zip Vercel")}</span>
                   </button>
                 </div>
               </div>
@@ -5590,7 +7365,7 @@ export default function App() { ... }
                     <span>{activeFile}</span>
                   </span>
                   <span className="text-zinc-500 text-[11px]">
-                    {files[activeFile]?.length || 0} символов
+                    {files[activeFile]?.length || 0} {t("chars")}
                   </span>
                 </div>
 
@@ -5602,14 +7377,16 @@ export default function App() { ... }
                       setFiles((prev) => {
                         const updated = { ...prev, [activeFile]: val };
                         if (activeChatId) {
+                          const now = new Date().toISOString();
                           try {
                             const raw = window.localStorage.getItem(`igseek:engine_proj_${activeChatId}`);
                             const parsed = raw ? JSON.parse(raw) : {};
                             window.localStorage.setItem(
                               `igseek:engine_proj_${activeChatId}`,
-                              JSON.stringify({ ...parsed, files: updated })
+                              JSON.stringify({ ...parsed, files: updated, activeFile, updatedAt: now })
                             );
                           } catch {}
+                          scheduleCloudEngineSave(activeChatId, updated, chatMessages, activeFile, false);
                         }
                         return updated;
                       });
@@ -5627,18 +7404,139 @@ export default function App() { ... }
   );
 }
 
+function WaveView({ onGoToChat }: { onGoToChat: () => void }) {
+  const t = useT();
+  const capabilities = [
+    {
+      icon: Mic,
+      title: t("Voice without typing"),
+      desc: t("Talk to AI by voice without having to type messages."),
+    },
+    {
+      icon: Volume2,
+      title: t("AI voice replies"),
+      desc: t("Receive live spoken responses directly from the AI."),
+    },
+    {
+      icon: Radio,
+      title: t("Real-time dialogues"),
+      desc: t("Have full two-way conversations in real time."),
+    },
+    {
+      icon: AudioLines,
+      title: t("Natural interruptions"),
+      desc: t("Interrupt the AI and continue the conversation naturally."),
+    },
+    {
+      icon: Sparkles,
+      title: t("Microphone access"),
+      desc: t("Use your microphone to talk directly with the assistant."),
+    },
+    {
+      icon: PhoneCall,
+      title: t("Like a phone call"),
+      desc: t("Communicate more naturally, almost like on a regular phone call."),
+    },
+  ];
+
+  return (
+    <div className="space-y-6 pb-8">
+      <div className="flex flex-col items-center text-center">
+        <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl border border-brand/30 bg-brand/10">
+          <AudioLines className="h-6 w-6 text-brand" />
+        </div>
+        <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-brand">
+          SOON
+        </div>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-4xl text-foreground">
+          IGseek Wave
+        </h1>
+        <p className="mt-2 max-w-xl text-[14px] leading-relaxed text-muted-foreground">
+          {t("In the future, IGseek will receive a real-time voice communication feature with AI — a dedicated mode focused on live voice conversation, just like a regular phone call.")}
+        </p>
+      </div>
+
+      {/* Decorative upcoming waveform preview card */}
+      <div className="rounded-2xl border border-border bg-surface p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-brand/30 bg-brand/10 text-brand">
+              <PhoneCall className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-foreground">
+                {t("Dedicated live voice mode")}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {t("Real-time AI voice conversation.")}
+              </div>
+            </div>
+          </div>
+          <span className="rounded-full border border-border bg-surface-elevated px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+            SOON
+          </span>
+        </div>
+
+        <div className="mt-5 flex h-12 items-center justify-center gap-1.5 rounded-xl border border-dashed border-border bg-surface-elevated/40 px-4">
+          {[22, 42, 65, 38, 80, 52, 92, 60, 44, 76, 36, 54, 28].map((h, idx) => (
+            <span
+              key={idx}
+              className="w-1.5 rounded-full bg-brand/45"
+              style={{ height: `${Math.round((h / 100) * 32)}px` }}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Capabilities grid */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {capabilities.map((cap) => (
+          <div
+            key={cap.title}
+            className="rounded-xl border border-border bg-surface p-4 transition-colors hover:border-brand/40"
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-elevated text-brand">
+                <cap.icon className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-foreground">{cap.title}</div>
+                <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">{cap.desc}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Status notice + Back to chat */}
+      <div className="flex flex-col gap-4 rounded-xl border border-dashed border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-xs leading-relaxed text-muted-foreground">
+          {t("Status: SOON. This feature is planned for one of the upcoming IGseek updates and is not yet implemented.")}
+        </div>
+        <button
+          onClick={onGoToChat}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-foreground px-4 py-2 text-xs font-semibold text-background transition-opacity hover:opacity-90"
+        >
+          <MessageSquare className="h-3.5 w-3.5" />
+          <span>{t("Back to Chat")}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DocsView() {
   const t = useT();
   const docs = [
     {
-      title: t("Privacy Policy"),
-      desc: t("How we handle your data."),
-      href: "https://telegra.ph/Politika-konfidencialnosti-06-21-31",
-    },
-    {
       title: t("User Agreement"),
       desc: t("General terms of use."),
-      href: "https://telegra.ph/Polzovatelskoe-soglashenie-04-01-19",
+      href: USER_AGREEMENT_URL,
+    },
+    {
+      title: t("Privacy Policy"),
+      desc: t("How we handle your data."),
+      href: PRIVACY_POLICY_URL,
     },
     {
       title: t("Project & AI Agreement"),
@@ -5717,6 +7615,7 @@ function GmailAuthModal({
   onConnected?: () => void;
   pendingEmail?: { id?: string; action: string; to?: string; subject?: string; body?: string } | null;
 }) {
+  const t = useT();
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -5726,15 +7625,15 @@ function GmailAuthModal({
     try {
       const res = await connectGmail();
       if (res?.accessToken) {
-        toast.success("Gmail успешно подключен!");
+        toast.success(t("Gmail connected successfully!"));
         if (pendingEmail && pendingEmail.to && pendingEmail.body) {
           try {
             await sendGmailMessage({
               to: pendingEmail.to,
-              subject: pendingEmail.subject || "Без темы",
+              subject: pendingEmail.subject || t("No Subject"),
               body: pendingEmail.body,
             });
-            toast.success(`Письмо успешно отправлено на ${pendingEmail.to}!`);
+            toast.success(`${t("Email sent successfully to")} ${pendingEmail.to}!`);
           } catch (e: any) {
             console.error("Failed to send pending email:", e);
           }
@@ -5744,7 +7643,7 @@ function GmailAuthModal({
       }
     } catch (err: any) {
       console.error("Gmail connect error:", err);
-      setError(err?.message || "Не удалось подключиться к Google");
+      setError(err?.message || t("Failed to connect to Google"));
     } finally {
       setConnecting(false);
     }
@@ -5770,7 +7669,7 @@ function GmailAuthModal({
         <button
           onClick={onClose}
           className="absolute right-4 top-4 rounded-xl p-1.5 text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/5 transition-colors"
-          title="Закрыть"
+          title={t("Close")}
         >
           <X className="h-4 w-4" />
         </button>
@@ -5781,31 +7680,31 @@ function GmailAuthModal({
           </div>
           <div>
             <h3 className="text-lg font-bold text-zinc-900 dark:text-white leading-tight">
-              Вход в Gmail
+              {t("Sign in to Gmail")}
             </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-              Интеграция с вашей почтой Google
+              {t("Integrate with your Google email")}
             </p>
           </div>
         </div>
 
         <p className="text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed mb-4">
-          Для работы с вашей почтой (чтение входящих, поиск писем, создание и отправка) нейросети требуется авторизация в Google. Войдите в свой Google аккаунт для продолжения.
+          {t("To work with your email (reading inbox, searching emails, composing and sending), the AI requires Google authorization. Sign in to your Google account to continue.")}
         </p>
 
         {pendingEmail && (
           <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/5 dark:bg-red-500/10 p-3 text-xs">
             <div className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5 mb-1">
-              <span>📧</span> <span>Подготовлено письмо:</span>
+              <span>📧</span> <span>{t("Prepared email:")}</span>
             </div>
             {pendingEmail.to && (
               <div className="text-zinc-600 dark:text-zinc-400 truncate">
-                <span className="font-medium text-zinc-800 dark:text-zinc-200">Кому:</span> {pendingEmail.to}
+                <span className="font-medium text-zinc-800 dark:text-zinc-200">{t("To:")}</span> {pendingEmail.to}
               </div>
             )}
             {pendingEmail.subject && (
               <div className="text-zinc-600 dark:text-zinc-400 truncate">
-                <span className="font-medium text-zinc-800 dark:text-zinc-200">Тема:</span> {pendingEmail.subject}
+                <span className="font-medium text-zinc-800 dark:text-zinc-200">{t("Subject:")}</span> {pendingEmail.subject}
               </div>
             )}
           </div>
@@ -5814,15 +7713,15 @@ function GmailAuthModal({
         <div className="space-y-2 mb-6">
           <div className="flex items-center gap-2.5 text-xs text-zinc-600 dark:text-zinc-400">
             <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-            <span>Нейросеть сможет сама читать и искать нужные письма</span>
+            <span>{t("AI can read and search the emails you need")}</span>
           </div>
           <div className="flex items-center gap-2.5 text-xs text-zinc-600 dark:text-zinc-400">
             <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-            <span>Автоматическое составление и отправка по вашей команде</span>
+            <span>{t("Automatic drafting and sending on your command")}</span>
           </div>
           <div className="flex items-center gap-2.5 text-xs text-zinc-600 dark:text-zinc-400">
             <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-            <span>Безопасная прямая авторизация через официальный Google OAuth</span>
+            <span>{t("Secure direct authorization via official Google OAuth")}</span>
           </div>
         </div>
 
@@ -5837,7 +7736,7 @@ function GmailAuthModal({
             onClick={onClose}
             className="flex-1 rounded-xl border border-zinc-200 dark:border-white/10 px-4 py-2.5 text-xs font-semibold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-white/5 transition-colors cursor-pointer"
           >
-            Отмена
+            {t("Cancel")}
           </button>
           <button
             onClick={handleConnect}
@@ -5847,7 +7746,7 @@ function GmailAuthModal({
             {connecting ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span>Подключение...</span>
+                <span>{t("Connecting…")}</span>
               </>
             ) : (
               <>
@@ -5857,7 +7756,7 @@ function GmailAuthModal({
                   <path fill="#fff" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                   <path fill="#fff" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
                 </svg>
-                <span>Войти через Google</span>
+                <span>{t("Sign in with Google")}</span>
               </>
             )}
           </button>
@@ -5931,23 +7830,131 @@ function AppleIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/* ---------- Mandatory first-time registration accent picker modal (OAuth signups) ---------- */
+function AccentOnboardingModal({
+  theme,
+  onConfirm,
+}: {
+  theme: "light" | "dark";
+  onConfirm: (accent: AccentId) => void | Promise<void>;
+}) {
+  const t = useT();
+  const [picked, setPicked] = useState<AccentId | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!picked || saving) return;
+    setSaving(true);
+    try {
+      await onConfirm(picked);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto"
+    >
+      <motion.form
+        onSubmit={handleSubmit}
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 8 }}
+        transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-md rounded-3xl border border-border bg-background/95 p-6 shadow-2xl backdrop-blur-2xl"
+      >
+        <div className="flex items-center gap-3 mb-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--brand-soft)] text-[var(--brand)] border border-[var(--brand-border)] shrink-0">
+            <Palette className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-foreground">
+              {t("Choose interface accent color")}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              {t("Required once during account registration")}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground leading-relaxed mb-4">
+          {t("Pick the highlight color you want for IGseek. You can change it anytime later in Settings.")}
+        </p>
+
+        <div className="grid grid-cols-3 gap-2.5 mb-5">
+          {ACCENT_PRESETS.map((item) => {
+            const isSelected = picked === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  setPicked(item.id);
+                  applyAccent(item.id, theme);
+                }}
+                className={`rounded-2xl border p-3 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer text-center ${
+                  isSelected
+                    ? "border-[var(--brand)] bg-[var(--brand-soft)] text-foreground shadow-sm ring-1 ring-[var(--brand-border)] font-semibold scale-[1.02]"
+                    : "border-border bg-surface hover:bg-surface-elevated text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span
+                  className="relative flex h-7 w-7 items-center justify-center rounded-full border border-black/10 dark:border-white/20 shadow-sm shrink-0"
+                  style={{ background: item.swatch }}
+                >
+                  {isSelected && <Check className="h-3.5 w-3.5 text-white drop-shadow" />}
+                </span>
+                <span className="text-[11px] leading-none truncate w-full">{t(item.name)}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          type="submit"
+          disabled={!picked || saving}
+          className="w-full rounded-full bg-[var(--brand)] hover:brightness-110 text-white py-3 px-5 text-sm font-semibold transition-all shadow-md active:scale-95 disabled:opacity-40 flex items-center justify-center gap-2 cursor-pointer"
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("Complete registration")}
+        </button>
+      </motion.form>
+    </motion.div>
+  );
+}
+
 /* ---------- Profile modal (subscription management & settings) ---------- */
 function ProfileModal({
   user,
+  isGuest = false,
+  usageUid = "guest",
   onClose,
   onSignOut,
   onUpdate,
   model,
   onModelChange,
+  onAgentChange,
+  onSaveCloudPrefs,
 }: {
   user: NonNullable<User>;
+  isGuest?: boolean;
+  usageUid?: string;
   onClose: () => void;
   onSignOut: () => void;
   onUpdate?: (patch: Partial<NonNullable<User>>) => void;
   model?: ModelId;
   onModelChange?: (m: ModelId) => void;
+  onAgentChange?: (a: AgentId) => void;
+  onSaveCloudPrefs?: (patch: Record<string, any>) => void;
 }) {
   const t = useT();
+  const lang = useLang();
+  const { usage: promptUsage, resetAt: promptResetAt, limits: promptLimits } = usePromptLimits(usageUid);
   const [activeTab, setActiveTab] = useState<"settings" | "personalization" | "account">("settings");
   const [accent, setAccent] = useAccent();
   const [theme, setTheme] = useTheme();
@@ -5960,7 +7967,7 @@ function ProfileModal({
   const [currentAgent, setCurrentAgent] = useState(() => window.localStorage.getItem("igseek:agent") || "universal");
 
   const initials = user.name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase();
-  const memberSince = new Date(user.since).toLocaleDateString("ru-RU", {
+  const memberSince = new Date(user.since).toLocaleDateString(localeFor(lang), {
     year: "numeric",
     month: "long",
   });
@@ -5972,6 +7979,18 @@ function ProfileModal({
     window.localStorage.setItem("igseek:ai_creativity", creativity);
     window.localStorage.setItem("igseek:ai_length", lengthOpt);
     window.localStorage.setItem("igseek:agent", currentAgent);
+    onAgentChange?.(currentAgent as AgentId);
+    if (!isGuest) {
+      onSaveCloudPrefs?.({
+        model: selectedModel,
+        agent: currentAgent,
+        ai_style: styleInput,
+        ai_creativity: creativity,
+        ai_length: lengthOpt,
+        theme,
+        accent,
+      });
+    }
     window.dispatchEvent(new Event("igseek:settings-save"));
     onClose();
   };
@@ -5984,10 +8003,20 @@ function ProfileModal({
     setCreativity("balance");
     setLengthOpt("medium");
     setCurrentAgent("universal");
+    onAgentChange?.("universal");
     window.localStorage.removeItem("igseek:ai_style");
     window.localStorage.removeItem("igseek:ai_creativity");
     window.localStorage.removeItem("igseek:ai_length");
     window.localStorage.setItem("igseek:agent", "universal");
+    if (!isGuest) {
+      onSaveCloudPrefs?.({
+        model: "instinct",
+        agent: "universal",
+        ai_style: "",
+        ai_creativity: "balance",
+        ai_length: "medium",
+      });
+    }
   };
 
   return (
@@ -6010,7 +8039,7 @@ function ProfileModal({
         <button
           onClick={onClose}
           className="glass-button absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground cursor-pointer z-10"
-          aria-label="Close"
+          aria-label={t("Close")}
         >
           <X className="h-4 w-4" />
         </button>
@@ -6022,7 +8051,7 @@ function ProfileModal({
           </div>
           <div className="min-w-0">
             <div className="text-sm font-semibold truncate text-foreground">{user.name}</div>
-            <div className="text-[11px] text-muted-foreground truncate">{user.email || "Гость"}</div>
+            <div className="text-[11px] text-muted-foreground truncate">{user.email || t("Guest")}</div>
           </div>
         </div>
 
@@ -6035,7 +8064,7 @@ function ProfileModal({
                 activeTab === "settings" ? "bg-foreground text-background font-semibold shadow-sm" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              Нейросеть
+              {t("AI Model")}
             </button>
             <button
               onClick={() => setActiveTab("personalization")}
@@ -6043,7 +8072,7 @@ function ProfileModal({
                 activeTab === "personalization" ? "bg-foreground text-background font-semibold shadow-sm" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              Интерфейс
+              {t("Interface")}
             </button>
             <button
               onClick={() => setActiveTab("account")}
@@ -6051,7 +8080,7 @@ function ProfileModal({
                 activeTab === "account" ? "bg-foreground text-background font-semibold shadow-sm" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              Аккаунт
+              {t("Account")}
             </button>
           </div>
         </div>
@@ -6064,13 +8093,13 @@ function ProfileModal({
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sm text-foreground flex items-center gap-2">
                   <Sparkles className="h-4 w-4 text-brand" />
-                  Параметры AI и стиль
+                  {t("AI settings & style")}
                 </span>
                 <button
                   onClick={handleReset}
                   className="text-xs text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
                 >
-                  Сброс
+                  {t("Reset")}
                 </button>
               </div>
 
@@ -6078,10 +8107,10 @@ function ProfileModal({
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   <Sparkles className="h-3.5 w-3.5 text-brand" />
-                  Модель нейросети
+                  {t("Language model")}
                 </label>
                 <p className="text-[11px] text-muted-foreground">
-                  Выбери базовую языковую модель для общения и генерации
+                  {t("Choose the base language model for chatting and generation")}
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {MODELS.map((m) => {
@@ -6102,7 +8131,7 @@ function ProfileModal({
                           {isSelected && <Check className="h-3.5 w-3.5 text-brand shrink-0" />}
                         </div>
                         <div className="text-[10px] text-muted-foreground mt-1">
-                          {m.tag}
+                          {t(m.tag)}
                         </div>
                       </button>
                     );
@@ -6113,15 +8142,15 @@ function ProfileModal({
               {/* 2. Character / Style */}
               <div className="space-y-1.5">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
-                  ✍️ Характер / стиль общения
+                  ✍️ {t("Personality / communication style")}
                 </label>
                 <p className="text-[11px] text-muted-foreground">
-                  Опиши как должен общаться AI — тон, манеру, персонажа
+                  {t("Describe how the AI should communicate — tone, manner, persona")}
                 </p>
                 <textarea
                   value={styleInput}
                   onChange={(e) => setStyleInput(e.target.value)}
-                  placeholder="Напр: отвечай как циничный детектив из нуара, всегда кратко и с сарказмом"
+                  placeholder={t("E.g.: reply like a cynical noir detective, always brief and sarcastic")}
                   rows={3}
                   className="w-full rounded-xl border border-border/80 bg-surface-elevated/50 p-3 text-xs text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-brand transition-colors resize-none"
                 />
@@ -6130,15 +8159,15 @@ function ProfileModal({
               {/* 3. Creativity */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
-                  🌡️ Креативность
+                  🌡️ {t("Creativity")}
                 </label>
-                <p className="text-[11px] text-muted-foreground">Точность vs непредсказуемость ответов</p>
+                <p className="text-[11px] text-muted-foreground">{t("Precision vs. unpredictability of answers")}</p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
-                    { id: "exact", label: "🎯 Точно" },
-                    { id: "balance", label: "⚖️ Баланс" },
-                    { id: "vivid", label: "🎨 Живо" },
-                    { id: "chaos", label: "🎲 Хаос" },
+                    { id: "exact", label: `🎯 ${t("Exact")}` },
+                    { id: "balance", label: `⚖️ ${t("Balance")}` },
+                    { id: "vivid", label: `🎨 ${t("Vivid")}` },
+                    { id: "chaos", label: `🎲 ${t("Chaos")}` },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -6159,15 +8188,15 @@ function ProfileModal({
               {/* 4. Answer Length */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
-                  📏 Длина ответов
+                  📏 {t("Response length")}
                 </label>
-                <p className="text-[11px] text-muted-foreground">Как много пишет AI в одном сообщении</p>
+                <p className="text-[11px] text-muted-foreground">{t("How much the AI writes per message")}</p>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { id: "short", label: "⚡ Коротко", hint: "~1-3 предл." },
-                    { id: "medium", label: "📝 Средне", hint: "~1 абзац" },
-                    { id: "long", label: "📖 Длинно", hint: "подробно" },
-                    { id: "unlimited", label: "∞ Без лимита", hint: "полный лонгрид" },
+                    { id: "short", label: `⚡ ${t("Short")}`, hint: t("~1-3 sentences") },
+                    { id: "medium", label: `📝 ${t("Medium")}`, hint: t("~1 paragraph") },
+                    { id: "long", label: `📖 ${t("Long")}`, hint: t("detailed") },
+                    { id: "unlimited", label: `∞ ${t("Unlimited")}`, hint: t("full longform") },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -6189,15 +8218,15 @@ function ProfileModal({
               {/* 5. Mode / Agent */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
-                  🤖 Режим / Агент
+                  🤖 {t("Mode / Agent")}
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {[
-                    { id: "universal", name: "Универсальный", desc: "Дерзкий, саркастичный, всеядный" },
-                    { id: "coder", name: "Код", desc: "Программирование, дебаггинг" },
-                    { id: "mentor", name: "Обучение", desc: "Объясняет, конспектирует" },
-                    { id: "psy", name: "Психолог", desc: "Жёсткая честность, без сахара" },
-                    { id: "hacker", name: "Хакер", desc: "Кибербез, OSINT, всё техническое" },
+                    { id: "universal", name: t("Universal"), desc: t("Direct, witty, versatile") },
+                    { id: "coder", name: t("Code"), desc: t("Programming, debugging") },
+                    { id: "mentor", name: t("Learning"), desc: t("Explains & takes structured notes") },
+                    { id: "psy", name: t("Psychologist"), desc: t("Brutal honesty, no sugarcoating") },
+                    { id: "hacker", name: t("Hacker"), desc: t("Cybersecurity, OSINT, deeply technical") },
                   ].map((agentItem) => (
                     <button
                       key={agentItem.id}
@@ -6217,101 +8246,151 @@ function ProfileModal({
               </div>
             </>
           ) : activeTab === "personalization" ? (
-            <>
-              {/* Personalization Tab */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-sm text-foreground flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-brand" />
-                    Интерфейс и оформление
-                  </span>
+            <div className="rounded-2xl border border-border/70 bg-surface-elevated/40 p-4 sm:p-5 space-y-5 shadow-sm">
+              {/* Personalization Tab Header */}
+              <div className="flex items-center justify-between pb-1 border-b border-border/50">
+                <span className="font-semibold text-sm text-foreground flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-brand" />
+                  {t("Interface & appearance")}
+                </span>
+                <button
+                  onClick={() => setAccent("default")}
+                  className="text-xs text-muted-foreground hover:text-destructive transition-colors cursor-pointer px-2 py-1 rounded-md hover:bg-destructive/10"
+                >
+                  {t("Reset accent")}
+                </button>
+              </div>
+
+              {/* Theme toggle */}
+              <div className="space-y-2">
+                <label className="font-medium text-foreground flex items-center gap-1.5">
+                  🌓 {t("Interface theme")}
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
                   <button
-                    onClick={() => setAccent("default")}
-                    className="text-xs text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+                    type="button"
+                    onClick={() => setTheme("dark")}
+                    className={`rounded-xl border p-2.5 flex items-center justify-center gap-2 font-medium transition-all cursor-pointer ${
+                      theme === "dark"
+                        ? "border-brand bg-brand/15 text-brand shadow-sm"
+                        : "border-border/70 bg-surface-elevated/40 text-muted-foreground hover:text-foreground"
+                    }`}
                   >
-                    Сброс акцента
+                    <Moon className="h-4 w-4" /> {t("Dark")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTheme("light")}
+                    className={`rounded-xl border p-2.5 flex items-center justify-center gap-2 font-medium transition-all cursor-pointer ${
+                      theme === "light"
+                        ? "border-[#18181b] bg-[#18181b]/15 text-[#18181b] dark:border-white dark:bg-white/15 dark:text-white shadow-sm"
+                        : "border-border/70 bg-surface-elevated/40 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Sun className="h-4 w-4" /> {t("Light")}
                   </button>
                 </div>
+              </div>
 
-                {/* Theme toggle */}
-                <div className="space-y-1.5">
-                  <label className="font-medium text-foreground flex items-center gap-1.5">
-                    🌓 Тема интерфейса
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setTheme("dark")}
-                      className={`rounded-xl border p-2.5 flex items-center justify-center gap-2 font-medium transition-all cursor-pointer ${
-                        theme === "dark"
-                          ? "border-brand bg-brand/15 text-brand shadow-sm"
-                          : "border-border/70 bg-surface-elevated/40 text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      <Moon className="h-4 w-4" /> Тёмная
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTheme("light")}
-                      className={`rounded-xl border p-2.5 flex items-center justify-center gap-2 font-medium transition-all cursor-pointer ${
-                        theme === "light"
-                          ? "border-[#18181b] bg-[#18181b]/15 text-[#18181b] dark:border-white dark:bg-white/15 dark:text-white shadow-sm"
-                          : "border-border/70 bg-surface-elevated/40 text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      <Sun className="h-4 w-4" /> Светлая
-                    </button>
-                  </div>
-                </div>
-
-                {/* Accent Color Section */}
-                <div className="space-y-2">
-                  <label className="font-medium text-foreground flex items-center gap-1.5">
-                    🎨 Акцент цвета
-                  </label>
-                  <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    Основной цвет элементов интерфейса. По умолчанию для светлой темы — чёрный, для тёмной — красный.
-                  </p>
-                  <div className="grid grid-cols-3 gap-2 pt-1">
-                    {ACCENT_PRESETS.map((item) => {
-                      const isSelected = accent === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => setAccent(item.id)}
-                          className={`rounded-xl border p-2.5 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer text-center ${
-                            isSelected
-                              ? "border-brand bg-brand/15 text-brand shadow-sm ring-1 ring-brand/50 font-semibold"
-                              : "border-border/70 bg-surface-elevated/40 text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          <span
-                            className="h-5 w-5 rounded-full border border-white/20 shadow-sm shrink-0"
-                            style={{ background: item.swatch }}
-                          />
-                          <span className="text-[11px] leading-none truncate w-full">{item.name}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+              {/* Accent Color Section */}
+              <div className="space-y-2">
+                <label className="font-medium text-foreground flex items-center gap-1.5">
+                  🎨 {t("Accent color")}
+                </label>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  {t("Primary UI highlight color. Default for light theme is black, and for dark theme is red.")}
+                </p>
+                <div className="grid grid-cols-3 gap-2 pt-1">
+                  {ACCENT_PRESETS.map((item) => {
+                    const isSelected = accent === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setAccent(item.id)}
+                        className={`rounded-xl border p-2.5 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer text-center ${
+                          isSelected
+                            ? "border-brand bg-brand/15 text-brand shadow-sm ring-1 ring-brand/50 font-semibold"
+                            : "border-border/70 bg-surface-elevated/40 text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <span
+                          className="h-5 w-5 rounded-full border border-white/20 shadow-sm shrink-0"
+                          style={{ background: item.swatch }}
+                        />
+                        <span className="text-[11px] leading-none truncate w-full">{t(item.name)}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-            </>
+            </div>
           ) : (
             <>
               {/* Account Tab */}
+              {/* Prompt Limits Breakdown */}
+              <div className="glass-card rounded-xl border border-border/80 bg-surface-elevated/40 p-4 space-y-3">
+                <div className="flex items-center justify-between text-sm font-medium text-foreground">
+                  <span className="flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-brand" />
+                    {t("Prompt limits")}
+                  </span>
+                </div>
+                <div className="space-y-2.5">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-foreground">{t("Chat")}</span>
+                      <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                        ∞ {t("Unlimited")}
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-white/10">
+                      <div className="h-full w-full rounded-full bg-[var(--brand)] opacity-80" />
+                    </div>
+                  </div>
+                  {[
+                    { key: "image" as const, label: t("Photos (per day)"), used: promptUsage.image, limit: promptLimits.image },
+                    { key: "engine" as const, label: t("Engine"), used: promptUsage.engine, limit: promptLimits.engine },
+                    { key: "flow" as const, label: t("Flow"), used: promptUsage.flow, limit: promptLimits.flow },
+                  ].map((item) => {
+                    const pct = Math.min(100, Math.round((item.used / item.limit) * 100));
+                    const reached = item.used >= item.limit;
+                    return (
+                      <div key={item.key} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-foreground">{item.label}</span>
+                          <span className={`font-mono font-semibold ${reached ? "text-red-500" : "text-muted-foreground"}`}>
+                            {item.used}/{item.limit}
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-white/10">
+                          <div
+                            className={`h-full rounded-full transition-all duration-300 ${reached ? "bg-red-500" : "bg-[var(--brand)]"}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        {reached && promptResetAt[item.key] > 0 && (
+                          <div className="text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                            {t("Resets in")} {formatRemainingReset(promptResetAt[item.key], lang)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="glass-card rounded-xl border border-border/80 bg-surface-elevated/40 p-4 space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                   <Sparkles className="h-4 w-4 text-brand" />
-                  Возможности аккаунта
+                  {t("Account capabilities")}
                 </div>
                 <ul className="space-y-2 text-[12px] text-foreground/90">
                   {[
-                    "Мульти-модельный AI-чат и reasoning",
-                    "Специализированные агенты и эксперты",
-                    "Генерация кода и интерактивные артефакты",
-                    "Семантическая память и веб-поиск",
+                    t("Multi-model AI chat and reasoning"),
+                    t("Specialized agents and experts"),
+                    t("Code generation and interactive artifacts"),
+                    t("Semantic memory and web search"),
                   ].map((f) => (
                     <li key={f} className="flex items-center gap-2">
                       <Check className="h-3.5 w-3.5 text-brand shrink-0" />
@@ -6321,14 +8400,42 @@ function ProfileModal({
                 </ul>
               </div>
 
+              <div className="pt-3 border-t border-border/60 flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground">{t("Clear all cached data and restart")}</span>
+                <button
+                  onClick={async () => {
+                    if (confirm(t("Reset all data and start fresh? This will clear local storage and sign out."))) {
+                      try {
+                        await supabase.auth.signOut();
+                      } catch {}
+                      try {
+                        const keysToRemove = [];
+                        for (let i = 0; i < window.localStorage.length; i++) {
+                          const k = window.localStorage.key(i);
+                          if (k && k.startsWith("igseek:") && !k.startsWith("igseek:device_usage:") && k !== "igseek:device-fp") {
+                            keysToRemove.push(k);
+                          }
+                        }
+                        keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+                      } catch {}
+                      window.location.reload();
+                    }
+                  }}
+                  className="glass-button inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  {t("Reset app data")}
+                </button>
+              </div>
+
               <div className="flex items-center justify-between text-xs text-muted-foreground pt-2">
-                <span>Аккаунт с {memberSince}</span>
+                <span>{t("Member since")} {memberSince}</span>
                 <button
                   onClick={onSignOut}
                   className="glass-button inline-flex items-center gap-1.5 rounded-xl px-3 py-2 font-medium text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
                 >
                   <LogIn className="h-3.5 w-3.5 rotate-180" />
-                  Выйти из аккаунта
+                  {t("Sign out")}
                 </button>
               </div>
             </>
@@ -6341,13 +8448,13 @@ function ProfileModal({
             onClick={onClose}
             className="rounded-xl border border-border px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
           >
-            Отмена
+            {t("Cancel")}
           </button>
           <button
             onClick={handleSave}
             className="rounded-xl bg-foreground text-background dark:bg-[var(--brand)] dark:text-white hover:opacity-90 px-5 py-2 text-xs font-bold transition-all shadow-md cursor-pointer"
           >
-            Сохранить
+            {t("Save")}
           </button>
         </div>
       </motion.div>
@@ -6368,19 +8475,20 @@ type MemoryAttachment = {
 type Memory = { id: string; content: string; kind: string; created_at: string; attachment?: MemoryAttachment };
 
 const KIND_LABELS: Record<string, { label: string; color: string }> = {
-  name: { label: "Имя", color: "text-emerald-400" },
-  preference: { label: "Предпочтение", color: "text-brand" },
-  tech: { label: "Технологии", color: "text-sky-400" },
-  project: { label: "Проект", color: "text-amber-400" },
-  goal: { label: "Цель", color: "text-fuchsia-400" },
-  device: { label: "Устройство", color: "text-cyan-400" },
-  interest: { label: "Интерес", color: "text-orange-400" },
-  style: { label: "Стиль", color: "text-violet-400" },
-  other: { label: "Другое", color: "text-muted-foreground" },
+  name: { label: "Name", color: "text-emerald-400" },
+  preference: { label: "Preference", color: "text-brand" },
+  tech: { label: "Tech", color: "text-sky-400" },
+  project: { label: "Project", color: "text-amber-400" },
+  goal: { label: "Goal", color: "text-fuchsia-400" },
+  device: { label: "Device", color: "text-cyan-400" },
+  interest: { label: "Interest", color: "text-orange-400" },
+  style: { label: "Style", color: "text-violet-400" },
+  other: { label: "Other", color: "text-muted-foreground" },
 };
 
 function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: LangCode }) {
   const t = useT();
+  const lang = useLang();
   const [items, setItems] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -6469,7 +8577,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
         method: "POST",
         headers: { "content-type": "application/json", ...(h as Record<string, string>) },
         body: JSON.stringify({
-          content: text || `Вложение в памяти: ${draftAttachment?.name}`,
+          content: text || `${t("Memory attachment:")} ${draftAttachment?.name}`,
           attachment: draftAttachment,
         }),
       });
@@ -6630,7 +8738,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                     <div key={kind}>
                       <div className="mb-1.5 flex items-center gap-2 px-2 text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
                         <span className={`h-1 w-1 rounded-full bg-current ${meta.color}`} />
-                        <span>{meta.label}</span>
+                        <span>{t(meta.label)}</span>
                         <span className="text-muted-foreground/50">{list.length}</span>
                       </div>
                       <div className="flex flex-col gap-1">
@@ -6679,7 +8787,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                 <button
                   onClick={() => setDraftAttachment(null)}
                   className="p-0.5 hover:opacity-80 cursor-pointer"
-                  title="Убрать вложение"
+                  title={t("Remove attachment")}
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -6700,7 +8808,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                 type="button"
                 onClick={() => memFileInputRef.current?.click()}
                 className="glass-button flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-brand transition-colors cursor-pointer"
-                title="Прикрепить файл к памяти"
+                title={t("Attach file to memory")}
               >
                 <Paperclip className="h-4 w-4" />
               </button>
@@ -6735,7 +8843,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                 <button
                   onClick={() => setSelectedId(null)}
                   className="md:hidden glass-button mr-1 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground cursor-pointer"
-                  title="Назад"
+                  title={t("Back")}
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -6781,9 +8889,9 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                 >
                   <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
                     <span className={KIND_LABELS[selected.kind]?.color ?? "text-brand"}>●</span>
-                    <span>{KIND_LABELS[selected.kind]?.label ?? selected.kind}</span>
+                    <span>{t(KIND_LABELS[selected.kind]?.label ?? selected.kind)}</span>
                     <span>·</span>
-                    <span>{new Date(selected.created_at).toLocaleDateString()}</span>
+                    <span>{new Date(selected.created_at).toLocaleDateString(localeFor(lang))}</span>
                   </div>
 
                   {editing?.id === selected.id ? (
@@ -6818,7 +8926,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                             onClick={() => downloadMemAttachment(selected.attachment!)}
                             className="glass-button shrink-0 inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium text-brand hover:underline cursor-pointer"
                           >
-                            <Download className="h-3.5 w-3.5" /> Скачать
+                            <Download className="h-3.5 w-3.5" /> {t("Download")}
                           </button>
                         )}
                       </div>
@@ -6911,7 +9019,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                         >
                           <div className="flex items-center justify-between">
                             <div className={`text-[10px] uppercase tracking-[0.18em] ${meta.color}`}>
-                              {meta.label}
+                              {t(meta.label)}
                             </div>
                             <div className="text-[10px] text-muted-foreground">{list.length}</div>
                           </div>

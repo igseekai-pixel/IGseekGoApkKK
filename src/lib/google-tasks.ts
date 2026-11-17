@@ -125,7 +125,7 @@ export async function listTaskLists(): Promise<GoogleTaskList[]> {
   const data = await fetchTasksApi('/users/@me/lists');
   return (data.items || []).map((item: any) => ({
     id: item.id,
-    title: item.title || 'Мои задачи',
+    title: item.title || 'My Tasks',
     updated: item.updated,
   }));
 }
@@ -147,7 +147,7 @@ export async function listGoogleTasks(
   const data = await fetchTasksApi(`/lists/${encodedListId}/tasks?${params.toString()}`);
   return (data.items || []).map((item: any) => ({
     id: item.id,
-    title: item.title || 'Без названия',
+    title: item.title || 'Untitled',
     notes: item.notes,
     due: item.due,
     status: item.status || 'needsAction',

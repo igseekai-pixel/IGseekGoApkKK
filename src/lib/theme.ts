@@ -16,13 +16,17 @@ export type AccentPreset = {
   darkBubbleBg: string;
   darkShadow: string;
   darkGlowShadow: string;
+  lightSoft: string;
+  lightBorder: string;
+  lightShadow: string;
+  lightGlowShadow: string;
   logoFilter: string;
 };
 
 export const ACCENT_PRESETS: AccentPreset[] = [
   {
     id: "default",
-    name: "По умолчанию",
+    name: "Default",
     swatch: "linear-gradient(135deg, #ef4444 50%, #18181b 50%)",
     darkVal: "#ef4444",
     lightVal: "#18181b",
@@ -32,11 +36,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#3a131a",
     darkShadow: "0 0 16px rgba(239, 68, 68, 0.28)",
     darkGlowShadow: "rgba(239, 68, 68, 0.45)",
+    lightSoft: "rgba(24, 24, 27, 0.08)",
+    lightBorder: "rgba(24, 24, 27, 0.18)",
+    lightShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
+    lightGlowShadow: "rgba(0, 0, 0, 0.15)",
     logoFilter: "none",
   },
   {
     id: "red",
-    name: "Красный",
+    name: "Red",
     swatch: "#ef4444",
     darkVal: "#ef4444",
     lightVal: "#dc2626",
@@ -46,11 +54,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#3a131a",
     darkShadow: "0 0 16px rgba(239, 68, 68, 0.28)",
     darkGlowShadow: "rgba(239, 68, 68, 0.45)",
+    lightSoft: "rgba(220, 38, 38, 0.10)",
+    lightBorder: "rgba(220, 38, 38, 0.28)",
+    lightShadow: "0 4px 14px rgba(220, 38, 38, 0.20)",
+    lightGlowShadow: "rgba(220, 38, 38, 0.30)",
     logoFilter: "none",
   },
   {
     id: "orange",
-    name: "Оранжевый",
+    name: "Orange",
     swatch: "#f97316",
     darkVal: "#f97316",
     lightVal: "#ea580c",
@@ -60,11 +72,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#3d2011",
     darkShadow: "0 0 16px rgba(249, 115, 22, 0.32)",
     darkGlowShadow: "rgba(249, 115, 22, 0.48)",
+    lightSoft: "rgba(234, 88, 12, 0.10)",
+    lightBorder: "rgba(234, 88, 12, 0.28)",
+    lightShadow: "0 4px 14px rgba(234, 88, 12, 0.20)",
+    lightGlowShadow: "rgba(234, 88, 12, 0.30)",
     logoFilter: "hue-rotate(28deg) saturate(1.35) brightness(1.05)",
   },
   {
     id: "black",
-    name: "Чёрный",
+    name: "Black",
     swatch: "#18181b",
     darkVal: "#71717a",
     lightVal: "#18181b",
@@ -74,11 +90,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#27272a",
     darkShadow: "0 0 16px rgba(113, 113, 122, 0.28)",
     darkGlowShadow: "rgba(113, 113, 122, 0.45)",
+    lightSoft: "rgba(24, 24, 27, 0.08)",
+    lightBorder: "rgba(24, 24, 27, 0.18)",
+    lightShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
+    lightGlowShadow: "rgba(0, 0, 0, 0.15)",
     logoFilter: "grayscale(1) brightness(0.75)",
   },
   {
     id: "emerald",
-    name: "Изумрудный",
+    name: "Emerald",
     swatch: "#10b981",
     darkVal: "#10b981",
     lightVal: "#059669",
@@ -88,11 +108,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#0d3424",
     darkShadow: "0 0 16px rgba(16, 185, 129, 0.28)",
     darkGlowShadow: "rgba(16, 185, 129, 0.45)",
+    lightSoft: "rgba(5, 150, 105, 0.10)",
+    lightBorder: "rgba(5, 150, 105, 0.28)",
+    lightShadow: "0 4px 14px rgba(5, 150, 105, 0.20)",
+    lightGlowShadow: "rgba(5, 150, 105, 0.30)",
     logoFilter: "hue-rotate(130deg) saturate(1.2) brightness(0.95)",
   },
   {
     id: "blue",
-    name: "Синий",
+    name: "Blue",
     swatch: "#3b82f6",
     darkVal: "#3b82f6",
     lightVal: "#2563eb",
@@ -102,11 +126,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#112749",
     darkShadow: "0 0 16px rgba(59, 130, 246, 0.28)",
     darkGlowShadow: "rgba(59, 130, 246, 0.45)",
+    lightSoft: "rgba(37, 99, 235, 0.10)",
+    lightBorder: "rgba(37, 99, 235, 0.28)",
+    lightShadow: "0 4px 14px rgba(37, 99, 235, 0.20)",
+    lightGlowShadow: "rgba(37, 99, 235, 0.30)",
     logoFilter: "hue-rotate(215deg) saturate(1.3) brightness(1.05)",
   },
   {
     id: "purple",
-    name: "Фиолетовый",
+    name: "Purple",
     swatch: "#8b5cf6",
     darkVal: "#8b5cf6",
     lightVal: "#7c3aed",
@@ -116,11 +144,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#291642",
     darkShadow: "0 0 16px rgba(139, 92, 246, 0.28)",
     darkGlowShadow: "rgba(139, 92, 246, 0.45)",
+    lightSoft: "rgba(124, 58, 237, 0.10)",
+    lightBorder: "rgba(124, 58, 237, 0.28)",
+    lightShadow: "0 4px 14px rgba(124, 58, 237, 0.20)",
+    lightGlowShadow: "rgba(124, 58, 237, 0.30)",
     logoFilter: "hue-rotate(260deg) saturate(1.4) brightness(1.1)",
   },
   {
     id: "pink",
-    name: "Розовый",
+    name: "Pink",
     swatch: "#ec4899",
     darkVal: "#ec4899",
     lightVal: "#db2777",
@@ -130,11 +162,15 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#421229",
     darkShadow: "0 0 16px rgba(236, 72, 153, 0.28)",
     darkGlowShadow: "rgba(236, 72, 153, 0.45)",
+    lightSoft: "rgba(219, 39, 119, 0.10)",
+    lightBorder: "rgba(219, 39, 119, 0.28)",
+    lightShadow: "0 4px 14px rgba(219, 39, 119, 0.20)",
+    lightGlowShadow: "rgba(219, 39, 119, 0.30)",
     logoFilter: "hue-rotate(320deg) saturate(1.3) brightness(1.05)",
   },
   {
     id: "amber",
-    name: "Янтарный",
+    name: "Amber",
     swatch: "#f59e0b",
     darkVal: "#f59e0b",
     lightVal: "#d97706",
@@ -144,6 +180,10 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     darkBubbleBg: "#3d2608",
     darkShadow: "0 0 16px rgba(245, 158, 11, 0.28)",
     darkGlowShadow: "rgba(245, 158, 11, 0.45)",
+    lightSoft: "rgba(217, 119, 6, 0.10)",
+    lightBorder: "rgba(217, 119, 6, 0.28)",
+    lightShadow: "0 4px 14px rgba(217, 119, 6, 0.20)",
+    lightGlowShadow: "rgba(217, 119, 6, 0.30)",
     logoFilter: "hue-rotate(42deg) saturate(1.5) brightness(1.1)",
   },
 ];
@@ -180,15 +220,15 @@ export function applyAccent(accentId: AccentId, theme: Theme = getStoredTheme())
   const preset = ACCENT_PRESETS.find((p) => p.id === accentId) ?? ACCENT_PRESETS[0];
 
   const isLight = theme === "light";
-  const color = isLight ? (accentId === "default" ? "#18181b" : preset.lightVal) : preset.darkVal;
-  const soft = isLight ? "rgba(24, 24, 27, 0.08)" : preset.darkSoft;
-  const border = isLight ? "rgba(24, 24, 27, 0.18)" : preset.darkBorder;
-  const activeBg = isLight ? "#18181b" : preset.darkActiveBg;
-  const bubbleBg = isLight ? "#18181b" : preset.darkBubbleBg;
-  const shadow = isLight ? "0 4px 12px rgba(0, 0, 0, 0.1)" : preset.darkShadow;
-  const glowShadow = isLight ? "rgba(0, 0, 0, 0.15)" : preset.darkGlowShadow;
-  // Logo filter applies in dark mode; in light mode it remains black silhouette
-  const logoFilter = isLight ? "brightness(0)" : preset.logoFilter;
+  const color = isLight ? preset.lightVal : preset.darkVal;
+  const soft = isLight ? preset.lightSoft : preset.darkSoft;
+  const border = isLight ? preset.lightBorder : preset.darkBorder;
+  const activeBg = isLight ? preset.lightVal : preset.darkActiveBg;
+  const bubbleBg = isLight ? preset.lightVal : preset.darkBubbleBg;
+  const shadow = isLight ? preset.lightShadow : preset.darkShadow;
+  const glowShadow = isLight ? preset.lightGlowShadow : preset.darkGlowShadow;
+  // Logo filter is black silhouette for default/black in light theme, otherwise follows accent preset filter
+  const logoFilter = isLight && (accentId === "default" || accentId === "black") ? "brightness(0)" : preset.logoFilter;
 
   root.style.setProperty("--brand", color);
   root.style.setProperty("--brand-glow", color);

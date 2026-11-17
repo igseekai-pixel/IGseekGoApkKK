@@ -181,8 +181,8 @@ export async function getGmailMessage(messageId: string): Promise<GmailMessageSu
   const getHeader = (name: string) =>
     headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 
-  const subject = getHeader('subject') || 'Без темы';
-  const from = getHeader('from') || 'Неизвестный отправитель';
+  const subject = getHeader('subject') || 'No Subject';
+  const from = getHeader('from') || 'Unknown sender';
   const to = getHeader('to') || '';
   const date = getHeader('date') || new Date().toISOString();
 

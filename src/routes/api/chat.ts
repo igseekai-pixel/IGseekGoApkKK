@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { buildSystemPrompt, type AgentId } from "../../lib/system-prompts";
+import {
+  buildEffectiveWorkspacePrompt,
+  getCustomGlobalPromptForWorkspace,
+  type AgentId,
+} from "../../lib/system-prompts";
 import {
   analyzeAndUpdateMemory,
   getUserFromToken,
@@ -10,7 +14,13 @@ import {
 } from "../../lib/memory-server";
 import { checkContent, refusalMessage } from "../../lib/content-filters";
 import { isChinaSensitive } from "../../lib/sensitive-topics";
-import { generateImageWithGemini } from "../../lib/gemini-image";
+import { editImageWithGptImage2, generateImageWithGptImage2 } from "../../lib/apimira-image";
+import {
+  checkServerPhotoQuota,
+  consumeServerPhotoQuota,
+  resolvePhotoQuotaActorKey,
+} from "../../lib/photo-limits-server";
+import { searchWebLive } from "../../lib/web-search";
 
 const MessageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
@@ -25,6 +35,7 @@ const BodySchema = z.object({
   webSearch: z.boolean().optional().default(false),
   model: z.enum(["instinct", "chat", "f1"]).optional().default("instinct"),
   agent: z.enum(["universal", "coder", "hacker", "mentor", "psy", "creative"]).optional().default("universal"),
+  workspace: z.enum(["chat", "engine"]).optional().default("chat"),
   gmailConnected: z.boolean().optional().default(false),
   userAttachments: z
     .array(
@@ -34,6 +45,19 @@ const BodySchema = z.object({
         type: z.string().optional(),
       })
     )
+    .optional(),
+  previousGeneratedImage: z
+    .object({
+      dataUrl: z.string().max(16_000_000),
+      messageIndex: z.number().int().min(-1).optional(),
+    })
+    .optional(),
+  deviceFp: z.string().max(128).optional(),
+  imageQuota: z
+    .object({
+      used: z.number().int().min(0).max(100),
+      resetAt: z.number().int().min(0),
+    })
     .optional(),
 });
 
@@ -76,7 +100,7 @@ const IMAGE_TOOL = {
   function: {
     name: "generate_image",
     description:
-      "Сгенерировать изображение по текстовому описанию и вставить его в чат как карточку. Используй, когда пользователь просит картинку, изображение, иллюстрацию, фото, арт, визуал или что-то нарисовать. Не генерируй изображения без явного запроса пользователя.",
+      "Сгенерировать НОВОЕ изображение с нуля по текстовому описанию и вставить его в чат как карточку. Используй, когда пользователь просит нарисовать/создать картинку с нуля. Если пользователь прикрепил фото и просит отредактировать или добавить элемент на него — используй edit_image!",
     parameters: {
       type: "object",
       properties: {
@@ -84,9 +108,31 @@ const IMAGE_TOOL = {
         prompt: {
           type: "string",
           description:
-            "Детальное описание изображения на английском языке. Опиши стиль, сюжет, цвета, освещение, композицию и настроение. Чем конкретнее, тем лучше.",
+            "Детальное описание изображения на английском языке. Опиши стиль, сюжет, цвета, освещение, композицию и настроение. Чем конкренее, тем лучше.",
         },
         description: { type: "string", description: "Краткое описание для карточки (опционально)." },
+      },
+      required: ["title", "prompt"],
+    },
+  },
+};
+
+const EDIT_IMAGE_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "edit_image",
+    description:
+      "Отредактировать, изменить, дорисовать или стилизовать фотографию/изображение, прикреплённое пользователем в чате (добавить усы/очки/аксессуары, поменять фон, одежду, освещение, убрать объект, сделать ретушь или перерисовать в другом стиле). Вызывай ВСЕГДА, когда пользователь просит изменить прикреплённое или ранее созданное в чате фото!",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Короткое название результата для карточки." },
+        prompt: {
+          type: "string",
+          description:
+            "Чёткая инструкция редактирования на английском языке, что именно нужно добавить, удалить или изменить на исходном изображении (например: 'Add realistic dark mustache above the upper lip on the person in the photo, matching lighting, skin tone, and hair color while keeping everything else unchanged').",
+        },
+        description: { type: "string", description: "Краткое описание правки (опционально)." },
       },
       required: ["title", "prompt"],
     },
@@ -277,6 +323,38 @@ const REFUSAL_TOOL = {
   },
 };
 
+const TAB_TRANSITION_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "suggest_tab_transition",
+    description:
+      "Используй этот инструмент ОБЯЗАТЕЛЬНО, когда пользователь в базовом чате просит: 1) Создать full stack проект, веб-приложение, запустить живое превью или открыть IDE (target_tab: 'engine'); 2) Выложить код на GitHub, запустить CI/CD, выполнить bash-команды/терминал, запустить веб-мониторинг или автономный сценарий (target_tab: 'flow'); 3) Работать с файлами, вложениями или библиотекой знаний (target_tab: 'library'). Инструмент отобразит в чате интерактивную кнопку перехода. В тексте ответа ОБЯЗАТЕЛЬНО объясни границы возможностей текстового чата и почему задачу следует делать в этой вкладке, предложив перейти в неё по кнопке.",
+    parameters: {
+      type: "object",
+      properties: {
+        target_tab: {
+          type: "string",
+          enum: ["engine", "flow", "library", "saved"],
+          description: "Целевая вкладка: 'engine' (среда разработки, Full Stack проекты, live preview, многофайловое дерево), 'flow' (автономный агент, публикация на GitHub, защищённый терминал, пайплайны), 'library' (файлы и документы).",
+        },
+        title: {
+          type: "string",
+          description: "Заголовок карточки перехода (например, 'Создать Full Stack проект в Engine' или 'Выгрузить репозиторий на GitHub через Flow').",
+        },
+        reason: {
+          type: "string",
+          description: "Чёткое объяснение границ возможностей базового чата (например: 'В обычном чате код выводится только текстом без сборки, зависимостей и живого предпросмотра' или 'Прямая публикация на GitHub и терминал требуют среды Flow с подключённым OAuth').",
+        },
+        suggested_prompt: {
+          type: "string",
+          description: "Исходный запрос пользователя для автоматической передачи в целевую вкладку.",
+        },
+      },
+      required: ["target_tab", "title", "reason"],
+    },
+  },
+};
+
 type WebResult = { title: string; url: string; snippet: string };
 
 function decodeEntities(s: string): string {
@@ -295,33 +373,12 @@ function stripTags(s: string): string {
 }
 
 async function webSearch(query: string): Promise<WebResult[]> {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const res = await fetch(url, {
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
-      "accept-language": "en-US,en;q=0.9",
-    },
-  });
-  if (!res.ok) throw new Error(`search ${res.status}`);
-  const html = await res.text();
-  const results: WebResult[] = [];
-  const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) && results.length < 6) {
-    let href = m[1];
-    // DDG wraps external links: /l/?uddg=<encoded>
-    const uddg = href.match(/[?&]uddg=([^&]+)/);
-    if (uddg) {
-      try { href = decodeURIComponent(uddg[1]); } catch { /* keep */ }
-    }
-    results.push({
-      title: stripTags(m[2]).slice(0, 200),
-      url: href,
-      snippet: stripTags(m[3]).slice(0, 400),
-    });
-  }
-  return results;
+  const hits = await searchWebLive(query, 6);
+  return hits.map((h) => ({
+    title: h.title,
+    url: h.url,
+    snippet: h.snippet,
+  }));
 }
 
 type WebImageResult = {
@@ -414,10 +471,52 @@ type GeneratedImage = {
 // --- Vision: извлечение прикреплённых изображений из текста сообщений ---
 // Клиент вставляет картинки как markdown с data-URL: ![name](data:image/png;base64,...)
 const DATA_URL_RE = /!\[[^\]]*\]\((data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+)\)/g;
+const IGFILE_TAG_RE = /<!--\/?IGFILE(?::[^>]*)?-->/g;
+
+function cleanFileWrappers(text: string): string {
+  return text.replace(IGFILE_TAG_RE, "").trim();
+}
 
 /** Текст сообщения без base64-картинок — для фильтров, памяти и чувствительных тем. */
 function stripImageDataUrls(text: string): string {
-  return text.replace(DATA_URL_RE, "[прикреплённое изображение]").trim();
+  return cleanFileWrappers(text).replace(DATA_URL_RE, "[прикреплённое изображение]").trim();
+}
+
+function collectLatestSourceImages(
+  userAttachments: Array<{ name: string; dataUrl: string; type?: string }> | undefined,
+  messages: Array<{ role: string; content: string }>,
+  lastGeneratedImage: { dataUrl: string; messageIndex: number; sameTurn?: boolean } | null,
+): Array<{ dataUrl: string; mimeType?: string }> {
+  if (lastGeneratedImage?.sameTurn && lastGeneratedImage.dataUrl.startsWith("data:image/")) {
+    return [{ dataUrl: lastGeneratedImage.dataUrl }];
+  }
+
+  const fromAttachments = (userAttachments ?? [])
+    .filter((a) => a.dataUrl?.startsWith("data:image/"))
+    .map((a) => ({ dataUrl: a.dataUrl, mimeType: a.type }));
+  if (fromAttachments.length > 0) return fromAttachments;
+
+  let lastUserImageIndex = -1;
+  let lastUserImages: Array<{ dataUrl: string; mimeType?: string }> = [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== "user" || typeof m.content !== "string") continue;
+    const matches = [...m.content.matchAll(DATA_URL_RE)];
+    if (matches.length > 0) {
+      lastUserImageIndex = i;
+      lastUserImages = matches.map((match) => ({ dataUrl: match[1] }));
+      break;
+    }
+  }
+
+  if (
+    lastGeneratedImage?.dataUrl?.startsWith("data:image/") &&
+    (lastUserImageIndex < 0 || lastGeneratedImage.messageIndex >= lastUserImageIndex)
+  ) {
+    return [{ dataUrl: lastGeneratedImage.dataUrl }];
+  }
+
+  return lastUserImages;
 }
 
 type ApiContentPart =
@@ -441,7 +540,7 @@ function toApiMessages(
 
   return messages.map((m, index) => {
     if (m.role !== "user" || typeof m.content !== "string" || !m.content.includes("data:image/")) {
-      return { role: m.role, content: m.content ?? "" };
+      return { role: m.role, content: typeof m.content === "string" ? cleanFileWrappers(m.content) : (m.content ?? "") };
     }
 
     // Старые изображения сверх лимита вырезаем, чтобы не раздувать токены.
@@ -450,17 +549,17 @@ function toApiMessages(
     }
 
     const matches = [...m.content.matchAll(DATA_URL_RE)];
-    if (matches.length === 0) return { role: m.role, content: m.content };
+    if (matches.length === 0) return { role: m.role, content: cleanFileWrappers(m.content) };
 
     const parts: ApiContentPart[] = [];
     let cursor = 0;
     for (const match of matches) {
-      const textBefore = m.content.slice(cursor, match.index).trim();
+      const textBefore = cleanFileWrappers(m.content.slice(cursor, match.index));
       if (textBefore) parts.push({ type: "text", text: textBefore });
       parts.push({ type: "image_url", image_url: { url: match[1] } });
       cursor = (match.index ?? 0) + match[0].length;
     }
-    const tail = m.content.slice(cursor).trim();
+    const tail = cleanFileWrappers(m.content.slice(cursor));
     if (tail) parts.push({ type: "text", text: tail });
     // DeepSeek требует хотя бы один текстовый part рядом с изображением.
     if (!parts.some((p) => p.type === "text")) {
@@ -473,9 +572,9 @@ function toApiMessages(
   });
 }
 
-// Генерация изображений: мост через Gemini (@google/genai, gemini-3.1-flash-lite-image) с fallback на Pollinations Flux.
+// Генерация изображений: GPT Image 2 (openai/gpt-image-2) через APIMIRA.
 async function generateImage(prompt: string): Promise<string> {
-  const res = await generateImageWithGemini(prompt);
+  const res = await generateImageWithGptImage2(prompt);
   return res.dataUrl;
 }
 
@@ -612,12 +711,21 @@ export async function handleChatPost(request: Request): Promise<Response> {
           });
         }
 
+        const isEngineRequest = parsed.workspace === "engine";
+        const effectiveReasoning = parsed.reasoning;
+        const effectiveWebSearch = parsed.webSearch;
+        const clientSystemBlocks = parsed.messages
+          .filter((m) => m.role === "system")
+          .map((m) => m.content.trim())
+          .filter(Boolean);
         const cleanMessages = parsed.messages.filter((m) => m.role !== "system");
 
         // Long-term memory: identify user via bearer token, load relevant memories.
         const authHeader = request.headers.get("authorization") ?? "";
         const token = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7) : "";
         const authed = token ? await getUserFromToken(token) : null;
+        const photoQuotaActorKey = resolvePhotoQuotaActorKey(request, authed?.id, parsed.deviceFp);
+        let currentImageQuotaHint = parsed.imageQuota;
 
         // Текст последнего сообщения без base64-картинок — для фильтров и памяти.
         const lastUserMessage = stripImageDataUrls(
@@ -701,26 +809,45 @@ Tools available to you:
   3) Файлы из памяти: attachments: [{ filename: "<имя файла>", source: "memory", memory_id: "<id>" }].
 - generate_image: генерация картинок и открыток (мост с Gemini Image). DeepSeek формулирует детальный визуальный промпт на английском, который генерируется прямо в чате карточкой и может быть отправлен по почте!
 - refuse_unsupported_request: ЧЕСТНЫЙ ОТКАЗ И ГРАНИЦЫ ВОЗМОЖНОСТЕЙ. Используй этот инструмент НЕМЕДЛЕННО, если пользователь просит сделать то, что ты физически или технически НЕ УМЕЕШЬ (например: реальные телефонные звонки по сотовой связи, SMS с SIM-карты, банковские переводы денег, физические действия в материальном мире, живой взлом закрытых серверов, управление домашней техникой без интеграций, публикации в чужие соцсети без API). Не фантазируй и не притворяйся, что сделал невозможное — сразу вызывай refuse_unsupported_request и честно скажи об этом, предложив конструктивную альтернативу (написать код, скрипт, текст, найти инфу, создать задачу/напоминание).
+- suggest_tab_transition: ИНСТРУМЕНТ ПЕРЕХОДА В ДРУГУЮ ВКЛАДКУ (Engine, Flow, Library). Вызывай этот инструмент ВСЕГДА, когда пользователь в обычном чате просит:
+  1) Создать full stack проект, многофайловое веб-приложение, запустить живое превью кода, открыть среду разработки или IDE -> target_tab: "engine". Объясни: "В обычном чате код выводится текстом без сборки, а во вкладке Engine доступна полноценная среда разработки с файловым деревом, зависимостями и live preview."
+  2) Выложить код на GitHub, запустить CI/CD, выполнить bash-команды/терминал, настроить мониторинг или автономный сценарий -> target_tab: "flow". Объясни: "Обычный чат не имеет прямого терминала и OAuth-доступа к репозиториям GitHub. Для работы с GitHub, терминалом и многоэтапными процессами перейдите во вкладку Flow."
+  3) Посмотреть/организовать все файлы, вложения и документы -> target_tab: "library".
+  В тексте ответа ОБЯЗАТЕЛЬНО объясни границы возможностей базового текстового чата, почему задачу эффективнее выполнять в этой специализированной вкладке, и предложи пользователю нажать на появившуюся кнопку перехода!
 - manage_calendar_event: create, list, update or delete events/reminders in Google Calendar. Call this tool whenever the user asks to schedule a meeting, set a reminder, check schedule or manage calendar events.
 - manage_google_task: create, list, complete or update tasks in Google Tasks. Call this tool whenever the user asks to add a task, check todo list, mark a task done or manage tasks.
 - create_artifact: create a downloadable file card (code, HTML, markdown, document, config). Use it for substantial code or documents.
 - find_web_image: search and find REAL web photos, diagrams, or illustrations in the internet. Call this tool ONLY when user asks how something real looks ('как выглядит ...', 'покажи фото ...', 'найди картинку ...', 'схема ...') or asks to show a photo/picture of an object, person, place, animal or concept. Do NOT call this tool for normal conversational messages.
-${parsed.webSearch ? "\n- web_search: search the live internet. Use it whenever the user asks about current events, recent facts, prices, news or anything you might not know. Cite sources briefly in the answer." : ""}
+${effectiveWebSearch ? "\n- web_search: search the live internet. Use it whenever the user asks about current events, recent facts, prices, news or anything you might not know. Cite sources briefly in the answer." : ""}
 Diagrams & Charts:
 - When asked to create flowcharts, diagrams, schemas, graphs, mind maps, process flows or electrical/logic schematics, ALWAYS write a \`\`\`mermaid code block! Do NOT draw wide horizontal ASCII art schemas with long lines that break mobile layouts.
 Routing rules — decide automatically, never ask the user which engine to use:
+- Full Stack projects or live coding requests ("создай full stack проект", "напиши веб-приложение с превью"): call suggest_tab_transition with target_tab: "engine", explain why Engine is required, and invite user to switch!
+- GitHub publication, terminal commands, web monitoring or autonomous multi-step execution requests ("выложи на гитхаб", "запусти в терминале", "автоматизируй процесс"): call suggest_tab_transition with target_tab: "flow", explain that Flow provides OAuth GitHub access and isolated terminal, and invite user to switch!
 - Impossible / unsupported requests (phone calls, banking, physical acts, external live hacks): call refuse_unsupported_request immediately!
 - Text answers, analysis, code, search: you answer directly.
 - Diagrams/Schemas/Flowcharts: write a \`\`\`mermaid code block directly in your text answer.
 - Real photos / images: call find_web_image when requested or appropriate.
 - Calendar, Tasks, Gmail integrations: ALWAYS call manage_calendar_event, manage_google_task, or manage_gmail autonomously as needed to fulfill user requests directly in the chat!
-- Photos or screenshots ATTACHED by the user: you can see them — analyze the image content yourself and answer; never call generate_image for analyzing attachments.
-- Requests to CREATE a picture: call generate_image with a rich English visual prompt (subject, style, lighting, composition).
+- Photos or screenshots ATTACHED by the user:
+  * If the user asks what is on the image or asks to analyze it: analyze the image content yourself and answer; do not call generate_image.
+  * If the user asks to EDIT, MODIFY, ADD something to, REMOVE something from, retouch, or restyle an attached or previously generated image (e.g., "добавь усы", "приклей очки", "измени фон", "сделай в стиле аниме"): ALWAYS call edit_image immediately with a clear English edit instruction! NEVER refuse or claim you cannot edit photos!
+- Requests to CREATE a brand-new picture from scratch: call generate_image with a rich English visual prompt (subject, style, lighting, composition).
 Never output raw tool-call markup as part of your visible answer.
 After using a tool, briefly confirm what was created or executed and do not repeat the full content.`;
+        const effectiveSystemCore = buildEffectiveWorkspacePrompt(
+          parsed.agent as AgentId,
+          parsed.workspace,
+        );
+        const engineContextBlock =
+          isEngineRequest && clientSystemBlocks.length > 0
+            ? `\n\nENGINE WORKSPACE FORMAT CONTRACT:\n${clientSystemBlocks.join("\n\n")}`
+            : "";
         const systemMessage: ChatMessage = {
           role: "system",
-          content: `${buildSystemPrompt(parsed.agent as AgentId)}\n\n${capabilities}${memoryBlock}${userAttachmentsBlock}`,
+          content: isEngineRequest
+            ? `${effectiveSystemCore}${engineContextBlock}${memoryBlock}${userAttachmentsBlock}`
+            : `${effectiveSystemCore}\n\n${capabilities}${memoryBlock}${userAttachmentsBlock}`,
         };
         const baseMessages: ChatMessage[] = [
           systemMessage,
@@ -728,17 +855,46 @@ After using a tool, briefly confirm what was created or executed and do not repe
         ];
 
 
-        // reasoning-модель инструменты не поддерживает — включаем tools только для чат-модели.
-        const supportsTools = !parsed.reasoning;
+        const supportsTools = !effectiveReasoning && !isEngineRequest;
         const activeTools = supportsTools
-          ? [ARTIFACT_TOOL, IMAGE_TOOL, WEB_IMAGE_TOOL, CALENDAR_TOOL, TASKS_TOOL, GMAIL_TOOL, MEMORY_TOOL, REFUSAL_TOOL, ...(parsed.webSearch ? [WEB_SEARCH_TOOL] : [])]
+          ? [
+              ARTIFACT_TOOL,
+              IMAGE_TOOL,
+              EDIT_IMAGE_TOOL,
+              WEB_IMAGE_TOOL,
+              CALENDAR_TOOL,
+              TASKS_TOOL,
+              GMAIL_TOOL,
+              MEMORY_TOOL,
+              REFUSAL_TOOL,
+              TAB_TRANSITION_TOOL,
+              ...(effectiveWebSearch ? [WEB_SEARCH_TOOL] : []),
+            ]
           : [];
 
+        let streamClosed = false;
         const stream = new ReadableStream<Uint8Array>({
+          cancel() {
+            streamClosed = true;
+          },
           async start(controller) {
             const encoder = new TextEncoder();
             const send = (event: string, data: string) => {
-              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+              if (streamClosed) return;
+              try {
+                controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+              } catch {
+                streamClosed = true;
+              }
+            };
+            const safeClose = () => {
+              if (streamClosed) return;
+              streamClosed = true;
+              try {
+                controller.close();
+              } catch {
+                /* already closed */
+              }
             };
 
             type StreamOutcome = {
@@ -756,7 +912,7 @@ After using a tool, briefly confirm what was created or executed and do not repe
                 apiKey!,
                 messages,
                 tools.length ? tools : null,
-                parsed.reasoning,
+                effectiveReasoning,
                 parsed.model,
               );
               if (!upstream.ok || !upstream.body) {
@@ -834,18 +990,33 @@ After using a tool, briefly confirm what was created or executed and do not repe
               return { finishReason, toolCalls, assistantText };
             }
 
-            try {
-              let finalAssistantText = "";
+            let finalAssistantText = "";
+            let hitImageLimit = false;
+            let lastGeneratedImageDataUrl: string | null =
+              parsed.previousGeneratedImage?.dataUrl?.startsWith("data:image/")
+                ? parsed.previousGeneratedImage.dataUrl
+                : null;
+            let lastGeneratedImageState: { dataUrl: string; messageIndex: number; sameTurn?: boolean } | null =
+              lastGeneratedImageDataUrl
+                ? {
+                    dataUrl: lastGeneratedImageDataUrl,
+                    messageIndex: parsed.previousGeneratedImage?.messageIndex ?? cleanMessages.length - 1,
+                    sameTurn: false,
+                  }
+                : null;
 
+            try {
               // Темы, которые базовая модель цензурирует (Тяньаньмэнь, независимость
               // Тайваня, Синьцзян и т.д.) → маршрутизируем на fallback-модель.
               // Никаких инструментов, только текстовый ответ.
               if (isChinaSensitive(lastUserMessage)) {
+                const custom = getCustomGlobalPromptForWorkspace(parsed.workspace);
+                const customDirective = custom ? `${custom}\n\n` : "";
                 const fallbackMessages = [
                   {
                     role: "system" as const,
                     content:
-                      "Answer the user's question directly, factually, and neutrally. Do not discuss unrelated topics.",
+                      `${customDirective}Answer the user's question directly, factually, and neutrally. Do not discuss unrelated topics.`,
                   },
                   { role: "user" as const, content: lastUserMessage },
                 ];
@@ -857,17 +1028,15 @@ After using a tool, briefly confirm what was created or executed and do not repe
                     analyzeAndUpdateMemory(clientForMemory, userIdForMemory, lastUserMessage, finalAssistantText)
                       .then((changed) => { if (changed) send("memory_updated", "1"); })
                       .catch((e) => console.error("memory analyze error", e))
-                      .finally(() => { try { controller.close(); } catch { /* already closed */ } });
+                      .finally(() => { safeClose(); });
                   });
                   send("done", "1");
                 } else {
                   send("done", "1");
-                  controller.close();
+                  safeClose();
                 }
                 return;
               }
-
-              let lastGeneratedImageDataUrl: string | null = null;
 
               // Первый проход — с инструментами, но текст форвардим сразу.
               const first = await runStream(baseMessages, activeTools, true);
@@ -919,6 +1088,33 @@ After using a tool, briefly confirm what was created or executed and do not repe
                     }
                   } else if (tc.function.name === "generate_image") {
                     try {
+                      const quotaStatus = checkServerPhotoQuota(photoQuotaActorKey, currentImageQuotaHint);
+                      if (!quotaStatus.allowed) {
+                        hitImageLimit = true;
+                        send(
+                          "image_limit",
+                          JSON.stringify({
+                            scope: "image",
+                            used: quotaStatus.used,
+                            limit: quotaStatus.limit,
+                            resetAt: quotaStatus.resetAt,
+                          }),
+                        );
+                        followupMessages.push({
+                          role: "tool",
+                          tool_call_id: tc.id,
+                          content: JSON.stringify({
+                            ok: false,
+                            limit_reached: true,
+                            used: quotaStatus.used,
+                            limit: quotaStatus.limit,
+                            resetAt: quotaStatus.resetAt,
+                            message:
+                              "Дневной лимит генерации и редактирования фото (8 фото в день) исчерпан. Пользователю уже показана карточка с таймером до обновления. Кратко подтверди, что лимит на сегодня исчерпан, и напомни, что обычный текстовый чат работает без ограничений.",
+                          }),
+                        });
+                        continue;
+                      }
                       const parsedArgs = JSON.parse(tc.function.arguments) as {
                         title?: string;
                         prompt?: string;
@@ -928,7 +1124,15 @@ After using a tool, briefly confirm what was created or executed and do not repe
                       const imageTitle = String(parsedArgs.title ?? "Generated image");
                       send("image_start", JSON.stringify({ title: imageTitle, prompt: parsedArgs.prompt }));
                       const dataUrl = await generateImage(parsedArgs.prompt);
+                      const updatedQuota = consumeServerPhotoQuota(photoQuotaActorKey, currentImageQuotaHint);
+                      currentImageQuotaHint = { used: updatedQuota.used, resetAt: updatedQuota.resetAt };
+                      send("photo_usage", JSON.stringify(updatedQuota));
                       lastGeneratedImageDataUrl = dataUrl;
+                      lastGeneratedImageState = {
+                        dataUrl,
+                        messageIndex: cleanMessages.length,
+                        sameTurn: true,
+                      };
                       const image: GeneratedImage = {
                         id: tc.id,
                         title: imageTitle,
@@ -945,6 +1149,86 @@ After using a tool, briefly confirm what was created or executed and do not repe
                         content: JSON.stringify({
                           ok: true,
                           message: `Изображение «${image.title}» сгенерировано и показано пользователю карточкой. Не описывай картинку подробно — просто кратко подтверди.`,
+                        }),
+                      });
+                    } catch (e) {
+                      followupMessages.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: JSON.stringify({ ok: false, error: (e as Error).message }),
+                      });
+                    }
+                  } else if (tc.function.name === "edit_image") {
+                    try {
+                      const quotaStatus = checkServerPhotoQuota(photoQuotaActorKey, currentImageQuotaHint);
+                      if (!quotaStatus.allowed) {
+                        hitImageLimit = true;
+                        send(
+                          "image_limit",
+                          JSON.stringify({
+                            scope: "image",
+                            used: quotaStatus.used,
+                            limit: quotaStatus.limit,
+                            resetAt: quotaStatus.resetAt,
+                          }),
+                        );
+                        followupMessages.push({
+                          role: "tool",
+                          tool_call_id: tc.id,
+                          content: JSON.stringify({
+                            ok: false,
+                            limit_reached: true,
+                            used: quotaStatus.used,
+                            limit: quotaStatus.limit,
+                            resetAt: quotaStatus.resetAt,
+                            message:
+                              "Дневной лимит генерации и редактирования фото (8 фото в день) исчерпан. Пользователю уже показана карточка с таймером до обновления. Кратко подтверди, что лимит на сегодня исчерпан, и напомни, что обычный текстовый чат работает без ограничений.",
+                          }),
+                        });
+                        continue;
+                      }
+                      const parsedArgs = JSON.parse(tc.function.arguments) as {
+                        title?: string;
+                        prompt?: string;
+                        description?: string;
+                      };
+                      if (!parsedArgs.prompt) throw new Error("missing edit prompt");
+                      const sourceImages = collectLatestSourceImages(
+                        parsed.userAttachments,
+                        cleanMessages,
+                        lastGeneratedImageState,
+                      );
+                      if (sourceImages.length === 0) {
+                        throw new Error("No source image found for editing");
+                      }
+                      const imageTitle = String(parsedArgs.title ?? "Edited image");
+                      send("image_start", JSON.stringify({ title: imageTitle, prompt: parsedArgs.prompt }));
+                      const edited = await editImageWithGptImage2(parsedArgs.prompt, sourceImages);
+                      const updatedQuota = consumeServerPhotoQuota(photoQuotaActorKey, currentImageQuotaHint);
+                      currentImageQuotaHint = { used: updatedQuota.used, resetAt: updatedQuota.resetAt };
+                      send("photo_usage", JSON.stringify(updatedQuota));
+                      lastGeneratedImageDataUrl = edited.dataUrl;
+                      lastGeneratedImageState = {
+                        dataUrl: edited.dataUrl,
+                        messageIndex: cleanMessages.length,
+                        sameTurn: true,
+                      };
+                      const image: GeneratedImage = {
+                        id: tc.id,
+                        title: imageTitle,
+                        prompt: String(parsedArgs.prompt),
+                        description: parsedArgs.description
+                          ? String(parsedArgs.description)
+                          : undefined,
+                        dataUrl: edited.dataUrl,
+                      };
+                      send("image", JSON.stringify(image));
+                      followupMessages.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: JSON.stringify({
+                          ok: true,
+                          message: `Изображение «${image.title}» отредактировано по запросу и показано пользователю карточкой. Кратко подтверди, что правка выполнена.`,
                         }),
                       });
                     } catch (e) {
@@ -1019,7 +1303,7 @@ After using a tool, briefly confirm what was created or executed and do not repe
                       const calendarPayload = {
                         id: tc.id,
                         action: parsedArgs.action || "create",
-                        summary: parsedArgs.summary || "Событие календаря",
+                        summary: parsedArgs.summary || "Calendar Event",
                         description: parsedArgs.description,
                         location: parsedArgs.location,
                         startTime: parsedArgs.start_time,
@@ -1059,7 +1343,7 @@ After using a tool, briefly confirm what was created or executed and do not repe
                       const taskPayload = {
                         id: tc.id,
                         action: parsedArgs.action || "create",
-                        title: parsedArgs.title || "Новая задача",
+                        title: parsedArgs.title || "New Task",
                         notes: parsedArgs.notes,
                         due: parsedArgs.due,
                         taskId: parsedArgs.task_id,
@@ -1154,7 +1438,7 @@ After using a tool, briefly confirm what was created or executed and do not repe
                         id: tc.id,
                         action: parsedArgs.action || "list",
                         to: parsedArgs.to,
-                        subject: parsedArgs.subject || "Письмо Gmail",
+                        subject: parsedArgs.subject || "Gmail Message",
                         body: parsedArgs.body,
                         messageId: parsedArgs.message_id,
                         query: parsedArgs.query,
@@ -1238,9 +1522,9 @@ After using a tool, briefly confirm what was created or executed and do not repe
                       };
                       const refusalPayload = {
                         id: tc.id,
-                        action: String(parsedArgs.action || "Запрошенное действие"),
-                        reason: String(parsedArgs.reason || "Выходит за рамки технических возможностей"),
-                        alternative: String(parsedArgs.alternative || "Могу предложить помощь с кодом, текстом или информацией"),
+                        action: String(parsedArgs.action || "Requested action"),
+                        reason: String(parsedArgs.reason || "Outside technical capabilities"),
+                        alternative: String(parsedArgs.alternative || "I can help with code, writing, or research instead"),
                       };
                       send("refusal_event", JSON.stringify(refusalPayload));
                       followupMessages.push({
@@ -1250,6 +1534,38 @@ After using a tool, briefly confirm what was created or executed and do not repe
                           ok: true,
                           refused: true,
                           message: `Честный отказ зафиксирован: ты прямо признаешь, что не умеешь «${refusalPayload.action}» (причина: ${refusalPayload.reason}). Теперь скажи пользователю прямо, без виляний и без морализаторства: четко подтверди, что не умеешь это делать, и предложи альтернативу: «${refusalPayload.alternative}».`,
+                        }),
+                      });
+                    } catch (e) {
+                      followupMessages.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: JSON.stringify({ ok: false, error: (e as Error).message }),
+                      });
+                    }
+                  } else if (tc.function.name === "suggest_tab_transition") {
+                    try {
+                      const parsedArgs = JSON.parse(tc.function.arguments) as {
+                        target_tab?: "engine" | "flow" | "library" | "saved";
+                        title?: string;
+                        reason?: string;
+                        suggested_prompt?: string;
+                      };
+                      const transitionPayload = {
+                        id: tc.id,
+                        targetTab: parsedArgs.target_tab || "engine",
+                        title: parsedArgs.title || "Open dedicated workspace",
+                        reason: parsedArgs.reason || "This request requires tools from a dedicated workspace tab",
+                        suggestedPrompt: parsedArgs.suggested_prompt || lastUserMessage,
+                      };
+                      send("tab_transition_event", JSON.stringify(transitionPayload));
+                      followupMessages.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: JSON.stringify({
+                          ok: true,
+                          target_tab: transitionPayload.targetTab,
+                          message: `Интерактивная кнопка перехода во вкладку «${transitionPayload.targetTab}» показана пользователю в чате. Теперь обязательно объясни пользователю границы возможностей текстового чата (почему нельзя полноценно собрать/запустить или выгрузить проект прямо здесь в обычном тексте) и предложи нажать на появившуюся кнопку перехода.`,
                         }),
                       });
                     } catch (e) {
@@ -1270,31 +1586,45 @@ After using a tool, briefly confirm what was created or executed and do not repe
                 }
 
                 // Второй проход — без инструментов, стримим ответ модели.
-                const second = await runStream(followupMessages, [], true);
-                finalAssistantText = second.assistantText || finalAssistantText;
+                try {
+                  const second = await runStream(followupMessages, [], true);
+                  finalAssistantText = second.assistantText || finalAssistantText;
+                } catch (secondErr) {
+                  console.warn("Second pass streaming non-fatal fallback:", secondErr);
+                  if (!finalAssistantText && lastGeneratedImageDataUrl) {
+                    finalAssistantText = "Image created.";
+                    send("delta", JSON.stringify(finalAssistantText));
+                  }
+                }
               }
 
-              // Fire-and-forget: analyze the exchange and update long-term memory.
+              // Cleanly finish the SSE stream (or keep open briefly if memory update may emit)
               if (authed && lastUserMessage) {
                 const userIdForMemory = authed.id;
                 const clientForMemory = authed.client;
                 queueMicrotask(() => {
                   analyzeAndUpdateMemory(clientForMemory, userIdForMemory, lastUserMessage, finalAssistantText)
-                    .then((changed) => { if (changed) send("memory_updated", "1"); })
+                    .then((changed) => {
+                      if (changed) send("memory_updated", "1");
+                    })
                     .catch((e) => console.error("memory analyze error", e))
                     .finally(() => {
-                      try { controller.close(); } catch { /* already closed */ }
+                      safeClose();
                     });
                 });
                 send("done", "1");
               } else {
                 send("done", "1");
-                controller.close();
+                safeClose();
               }
             } catch (err) {
               console.error("stream error", err);
-              send("error", JSON.stringify("stream_failed"));
-              try { controller.close(); } catch { /* ignore */ }
+              if (!lastGeneratedImageDataUrl && !finalAssistantText && !hitImageLimit) {
+                send("error", JSON.stringify("stream_failed"));
+              } else {
+                send("done", "1");
+              }
+              safeClose();
             }
           },
         });

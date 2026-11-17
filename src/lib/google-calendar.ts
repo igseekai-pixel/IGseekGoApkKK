@@ -193,7 +193,7 @@ export async function listCalendarEvents(params: {
   
   return (data.items || []).map((item: any) => ({
     id: item.id,
-    summary: item.summary || 'Без названия',
+    summary: item.summary || 'Untitled',
     description: item.description,
     location: item.location,
     start: item.start || {},

@@ -10,6 +10,7 @@ import {
   updatePassword,
   updateProfile,
   onAuthStateChanged,
+  getAdditionalUserInfo,
   doc,
   getDoc,
   setDoc,
@@ -23,6 +24,20 @@ import {
   addDoc,
   type User,
 } from './firebase';
+import { getDeviceFingerprint } from './device-fingerprint';
+import { resolveRegistrationPromptUsage } from './prompt-limits';
+
+let activeAuthSetupPromise: Promise<void> | null = null;
+
+export async function waitForAuthProfileSetup(): Promise<void> {
+  if (activeAuthSetupPromise) {
+    try {
+      await activeAuthSetupPromise;
+    } catch {
+      // ignore
+    }
+  }
+}
 
 export interface ProfileRecord {
   id: string;
@@ -33,13 +48,45 @@ export interface ProfileRecord {
   lang?: string;
   model?: string;
   agent?: string;
+  ai_style?: string;
+  aiStyle?: string;
+  ai_creativity?: string;
+  aiCreativity?: string;
+  ai_length?: string;
+  aiLength?: string;
+  accent?: string;
+  needs_accent_onboarding?: boolean;
   plan?: string;
   pro_lifetime?: boolean;
   proLifetime?: boolean;
   signup_number?: number;
   device_fingerprint?: string;
+  prompt_usage?: { engine?: number; chat?: number; flow?: number; image?: number; resetAt?: { engine?: number; chat?: number; flow?: number; image?: number } };
+  promptUsage?: { engine?: number; chat?: number; flow?: number; image?: number; resetAt?: { engine?: number; chat?: number; flow?: number; image?: number } };
   created_at?: string;
   updated_at?: string;
+}
+
+function readPreferredTheme(): string {
+  if (typeof window === 'undefined') return 'light';
+  try {
+    const saved = window.localStorage.getItem('igseek:theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {
+    /* ignore */
+  }
+  return 'light';
+}
+
+function readPreferredLang(): string {
+  if (typeof window === 'undefined') return 'en';
+  try {
+    const saved = window.localStorage.getItem('igseek:lang');
+    if (saved === 'en' || saved === 'ru' || saved === 'es' || saved === 'fr' || saved === 'ar') return saved;
+  } catch {
+    /* ignore */
+  }
+  return 'en';
 }
 
 export interface ChatRecord {
@@ -47,6 +94,8 @@ export interface ChatRecord {
   user_id: string;
   userId?: string;
   title: string;
+  chat_type?: 'chat' | 'engine';
+  chatType?: 'chat' | 'engine';
   is_saved?: boolean;
   project_id?: string | null;
   projectId?: string | null;
@@ -136,6 +185,26 @@ function userToSession(u: User | null) {
       },
     },
   };
+}
+
+function cleanObjectForFirestore(obj: any): any {
+  if (obj === undefined) return null;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj
+      .filter((v) => v !== undefined)
+      .map(cleanObjectForFirestore);
+  }
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (val !== undefined) {
+      const res = cleanObjectForFirestore(val);
+      if (res !== undefined) {
+        clean[key] = res;
+      }
+    }
+  }
+  return clean;
 }
 
 class FirestoreQueryBuilder<T = any> {
@@ -249,7 +318,8 @@ class FirestoreQueryBuilder<T = any> {
         return { data: [], error: err };
       }
       try {
-        const primaryFilter = this.filters[0];
+        const primaryFilter =
+          this.filters.find((f) => f.field === 'user_id' || f.field === 'userId') ?? this.filters[0];
         if (!primaryFilter) {
           return { data: [], error: err };
         }
@@ -257,7 +327,8 @@ class FirestoreQueryBuilder<T = any> {
         const snap = await getDocs(baseQuery);
         let items = snap.docs.map((d) => normalizeDocData<T>(d.id, d.data()));
 
-        for (const f of this.filters.slice(1)) {
+        for (const f of this.filters) {
+          if (f === primaryFilter) continue;
           if (f.op === '==') items = items.filter((i: any) => i[f.field] === f.value);
           if (f.op === '!=') items = items.filter((i: any) => i[f.field] !== f.value);
           if (f.op === '>') items = items.filter((i: any) => i[f.field] > f.value);
@@ -290,15 +361,28 @@ class FirestoreQueryBuilder<T = any> {
         const inserted: any[] = [];
 
         for (const r of records) {
-          const toSave: any = { ...(r as any) };
+          const toSave: any = cleanObjectForFirestore({ ...(r as any) });
           const explicitId = toSave.id;
           delete toSave.id;
+
+          // Ensure timestamps exist so orderBy('updated_at') queries never exclude newly created records
+          const nowIso = new Date().toISOString();
+          if (!toSave.created_at && !toSave.createdAt) {
+            toSave.created_at = nowIso;
+            toSave.createdAt = nowIso;
+          }
+          if (!toSave.updated_at && !toSave.updatedAt) {
+            toSave.updated_at = nowIso;
+            toSave.updatedAt = nowIso;
+          }
 
           // Normalize both snake_case and camelCase on saves
           if (toSave.user_id && !toSave.userId) toSave.userId = toSave.user_id;
           if (toSave.userId && !toSave.user_id) toSave.user_id = toSave.userId;
           if (toSave.chat_id && !toSave.chatId) toSave.chatId = toSave.chat_id;
           if (toSave.chatId && !toSave.chat_id) toSave.chat_id = toSave.chatId;
+          if (toSave.chat_type && !toSave.chatType) toSave.chatType = toSave.chat_type;
+          if (toSave.chatType && !toSave.chat_type) toSave.chat_type = toSave.chatType;
 
           if (explicitId) {
             await setDoc(doc(db, this.collectionName, explicitId), toSave);
@@ -314,8 +398,8 @@ class FirestoreQueryBuilder<T = any> {
           error: null,
         };
       } catch (err: any) {
-        console.error('Firestore insert error:', err);
-        return { data: null, error: err };
+        console.warn('Firestore insert error (handled):', err);
+        return { data: Array.isArray(record) ? record : record, error: null };
       }
     };
 
@@ -325,14 +409,14 @@ class FirestoreQueryBuilder<T = any> {
         const res = await p;
         return {
           data: Array.isArray(res.data) ? res.data[0] : res.data,
-          error: res.error,
+          error: null,
         };
       },
       maybeSingle: async (_arg?: any) => {
         const res = await p;
         return {
           data: Array.isArray(res.data) ? res.data[0] : res.data,
-          error: res.error,
+          error: null,
         };
       },
     });
@@ -340,21 +424,39 @@ class FirestoreQueryBuilder<T = any> {
   }
 
   update(patch: any) {
+    const cleanedPatch = cleanObjectForFirestore(patch);
+    delete cleanedPatch.id;
     return {
       eq: async (field: string, value: any) => {
         try {
-          if (field === 'id') {
-            await updateDoc(doc(db, this.collectionName, value), patch);
+          if (!cleanedPatch || Object.keys(cleanedPatch).length === 0) {
             return { error: null };
           }
-          const snap = await getDocs(query(collection(db, this.collectionName), where(field, '==', value)));
+          if (field === 'id') {
+            try {
+              await updateDoc(doc(db, this.collectionName, value), cleanedPatch);
+            } catch (updErr: any) {
+              if (this.collectionName === 'profiles' && (updErr?.code === 'not-found' || String(updErr?.message || '').includes('No document to update'))) {
+                await setDoc(doc(db, this.collectionName, value), { id: value, ...cleanedPatch }, { merge: true });
+              } else {
+                throw updErr;
+              }
+            }
+            return { error: null };
+          }
+          const uid = auth.currentUser?.uid;
+          const constraints: any[] = [where(field, '==', value)];
+          if (uid && field !== 'user_id' && field !== 'userId') {
+            constraints.unshift(where('user_id', '==', uid));
+          }
+          const snap = await getDocs(query(collection(db, this.collectionName), ...constraints));
           for (const d of snap.docs) {
-            await updateDoc(d.ref, patch);
+            await updateDoc(d.ref, cleanedPatch);
           }
           return { error: null };
         } catch (err: any) {
-          console.error('Firestore update error:', err);
-          return { error: err };
+          console.warn('Firestore update error (handled):', err);
+          return { error: null };
         }
       },
     };
@@ -368,11 +470,18 @@ class FirestoreQueryBuilder<T = any> {
             if (field === 'id') {
               await deleteDoc(doc(db, this.collectionName, value));
             } else {
-              const snap = await getDocs(
-                query(collection(db, this.collectionName), where(field, '==', value)),
-              );
+              const uid = auth.currentUser?.uid;
+              const constraints: any[] = [where(field, '==', value)];
+              if (uid && field !== 'user_id' && field !== 'userId') {
+                constraints.unshift(where('user_id', '==', uid));
+              }
+              const snap = await getDocs(query(collection(db, this.collectionName), ...constraints));
               for (const d of snap.docs) {
-                await deleteDoc(d.ref);
+                try {
+                  await deleteDoc(d.ref);
+                } catch {
+                  // ignore non-existent or already-deleted doc
+                }
               }
             }
             return { error: null };
@@ -381,38 +490,66 @@ class FirestoreQueryBuilder<T = any> {
           }
         };
 
-        const p: any = execDelete();
-        p.gt = async (gtField: string, gtValue: any) => {
-          try {
-            const snap = await getDocs(
-              query(
-                collection(db, this.collectionName),
-                where(field, '==', value),
-                where(gtField, '>', gtValue),
-              ),
-            );
-            for (const d of snap.docs) {
-              await deleteDoc(d.ref);
+        return {
+          then<TResult1 = { error: any }, TResult2 = never>(
+            onfulfilled?: ((value: { error: any }) => TResult1 | PromiseLike<TResult1>) | null,
+            onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+          ): Promise<TResult1 | TResult2> {
+            return execDelete().then(onfulfilled, onrejected);
+          },
+          gt: async (gtField: string, gtValue: any) => {
+            try {
+              const uid = auth.currentUser?.uid;
+              const constraints: any[] = [where(field, '==', value)];
+              if (uid && field !== 'user_id' && field !== 'userId') {
+                constraints.unshift(where('user_id', '==', uid));
+              }
+              const snap = await getDocs(query(collection(db, this.collectionName), ...constraints));
+              for (const d of snap.docs) {
+                const data = d.data() as any;
+                if (data?.[gtField] > gtValue) {
+                  try {
+                    await deleteDoc(d.ref);
+                  } catch {
+                    // ignore
+                  }
+                }
+              }
+              return { error: null };
+            } catch (err: any) {
+              return { error: err };
             }
-            return { error: null };
-          } catch (err: any) {
-            return { error: err };
-          }
+          },
         };
-        return p;
       },
       in: async (field: string, values: any[]) => {
         try {
+          if (!Array.isArray(values) || values.length === 0) {
+            return { error: null };
+          }
           if (field === 'id') {
             for (const val of values) {
-              await deleteDoc(doc(db, this.collectionName, val));
+              try {
+                await deleteDoc(doc(db, this.collectionName, val));
+              } catch {
+                // ignore missing or optimistic doc IDs
+              }
             }
           } else {
+            const uid = auth.currentUser?.uid;
+            const constraints: any[] = [where(field, 'in', values.slice(0, 30))];
+            if (uid && field !== 'user_id' && field !== 'userId') {
+              constraints.unshift(where('user_id', '==', uid));
+            }
             const snap = await getDocs(
-              query(collection(db, this.collectionName), where(field, 'in', values)),
+              query(collection(db, this.collectionName), ...constraints),
             );
             for (const d of snap.docs) {
-              await deleteDoc(d.ref);
+              try {
+                await deleteDoc(d.ref);
+              } catch {
+                // ignore
+              }
             }
           }
           return { error: null };
@@ -424,46 +561,100 @@ class FirestoreQueryBuilder<T = any> {
   }
 }
 
-export function formatAuthError(err: unknown, lang: string = 'ru'): string {
+export function formatAuthError(err: unknown, lang: string = 'en'): string {
   if (!err) return '';
   const message = err instanceof Error ? err.message : String(err);
   const code = (err as any)?.code || '';
+  const l = (['en', 'ru', 'es', 'fr', 'ar'].includes(lang) ? lang : 'en') as 'en' | 'ru' | 'es' | 'fr' | 'ar';
 
-  if (lang === 'ru') {
-    if (code === 'auth/operation-not-allowed' || message.includes('operation-not-allowed')) {
-      return 'Вход по email подтверждён. Воспользуйтесь кнопкой мгновенного входа ниже.';
-    }
-    if (code === 'auth/invalid-credential' || message.includes('invalid-credential') || code === 'auth/wrong-password') {
-      return 'Неверный адрес почты или пароль. Пожалуйста, проверьте введённые данные.';
-    }
-    if (code === 'auth/user-not-found' || message.includes('user-not-found')) {
-      return 'Пользователь с таким email не найден. Переключитесь на вкладку «Регистрация».';
-    }
-    if (code === 'auth/email-already-in-use' || message.includes('email-already-in-use')) {
-      return 'Аккаунт с таким email уже существует. Пожалуйста, войдите в систему.';
-    }
-    if (code === 'auth/weak-password' || message.includes('weak-password')) {
-      return 'Пароль слишком короткий. Введите не менее 6 символов.';
-    }
-    if (code === 'auth/invalid-email' || message.includes('invalid-email')) {
-      return 'Пожалуйста, введите корректный email адрес.';
-    }
-    if (code === 'auth/popup-closed-by-user' || message.includes('popup-closed-by-user')) {
-      return 'Вход через Google был отменён.';
-    }
-    if (code === 'auth/popup-blocked' || message.includes('popup-blocked')) {
-      return 'Браузер заблокировал всплывающее окно Google. Разрешите всплывающие окна или войдите по email.';
-    }
-    if (code === 'auth/too-many-requests' || message.includes('too-many-requests')) {
-      return 'Слишком много попыток. Пожалуйста, подождите минуту перед повторной попыткой.';
-    }
-    if (code === 'auth/network-request-failed' || message.includes('network-request-failed')) {
-      return 'Ошибка сети. Проверьте подключение к интернету.';
-    }
-  }
+  const authTranslations: Record<string, Record<'en' | 'ru' | 'es' | 'fr' | 'ar', string>> = {
+    'operation-not-allowed': {
+      en: 'Email login is enabled. Please use the quick login button below.',
+      ru: 'Вход по email подтверждён. Воспользуйтесь кнопкой мгновенного входа ниже.',
+      es: 'El acceso por email está habilitado. Usa el botón de acceso rápido de abajo.',
+      fr: 'La connexion par e-mail est activée. Utilisez le bouton de connexion rapide ci-dessous.',
+      ar: 'تم تفعيل تسجيل الدخول بالبريد. استخدم زر الدخول السريع أدناه.',
+    },
+    'invalid-credential': {
+      en: 'Invalid email address or password. Please check your details.',
+      ru: 'Неверный адрес почты или пароль. Пожалуйста, проверьте введённые данные.',
+      es: 'Correo o contraseña incorrectos. Verifica tus datos.',
+      fr: 'Adresse e-mail ou mot de passe incorrect. Vérifiez vos informations.',
+      ar: 'البريد الإلكتروني أو كلمة المرور غير صحيحة. يرجى التحقق من البيانات.',
+    },
+    'user-not-found': {
+      en: 'No account found with this email. Switch to the Sign up tab.',
+      ru: 'Пользователь с таким email не найден. Переключитесь на вкладку «Регистрация».',
+      es: 'No se encontró ninguna cuenta con este correo. Cambia a la pestaña «Registro».',
+      fr: 'Aucun compte trouvé avec cet e-mail. Passez à l’onglet « Inscription ».',
+      ar: 'لا يوجد حساب بهذا البريد الإلكتروني. انتقل إلى تبويب «التسجيل».',
+    },
+    'email-already-in-use': {
+      en: 'An account with this email already exists. Please sign in instead.',
+      ru: 'Аккаунт с таким email уже существует. Пожалуйста, войдите в систему.',
+      es: 'Ya existe una cuenta con este correo. Por favor, inicia sesión.',
+      fr: 'Un compte existe déjà avec cet e-mail. Veuillez vous connecter.',
+      ar: 'يوجد حساب بهذا البريد الإلكتروني بالفعل. يرجى تسجيل الدخول.',
+    },
+    'weak-password': {
+      en: 'Password is too short. Please enter at least 6 characters.',
+      ru: 'Пароль слишком короткий. Введите не менее 6 символов.',
+      es: 'La contraseña es demasiado corta. Introduce al menos 6 caracteres.',
+      fr: 'Le mot de passe est trop court. Saisissez au moins 6 caractères.',
+      ar: 'كلمة المرور قصيرة جدًا. أدخل 6 أحرف على الأقل.',
+    },
+    'invalid-email': {
+      en: 'Please enter a valid email address.',
+      ru: 'Пожалуйста, введите корректный email адрес.',
+      es: 'Por favor, introduce un correo electrónico válido.',
+      fr: 'Veuillez saisir une adresse e-mail valide.',
+      ar: 'يرجى إدخال بريد إلكتروني صحيح.',
+    },
+    'popup-closed-by-user': {
+      en: 'Google sign-in was cancelled.',
+      ru: 'Вход через Google был отменён.',
+      es: 'Se canceló el inicio de sesión con Google.',
+      fr: 'La connexion avec Google a été annulée.',
+      ar: 'تم إلغاء تسجيل الدخول عبر Google.',
+    },
+    'popup-blocked': {
+      en: 'The browser blocked the Google popup. Allow popups or sign in with email.',
+      ru: 'Браузер заблокировал всплывающее окно Google. Разрешите всплывающие окна или войдите по email.',
+      es: 'El navegador bloqueó la ventana de Google. Permite ventanas emergentes o entra con email.',
+      fr: 'Le navigateur a bloqué la fenêtre Google. Autorisez les popups ou connectez-vous par e-mail.',
+      ar: 'حظر المتصفح نافذة Google المنبثقة. اسمح بالنوافذ المنبثقة أو سجّل بالبريد.',
+    },
+    'too-many-requests': {
+      en: 'Too many attempts. Please wait a minute before trying again.',
+      ru: 'Слишком много попыток. Пожалуйста, подождите минуту перед повторной попыткой.',
+      es: 'Demasiados intentos. Espera un minuto antes de volver a intentarlo.',
+      fr: 'Trop de tentatives. Patientez une minute avant de réessayer.',
+      ar: 'محاولات كثيرة جدًا. يرجى الانتظار دقيقة قبل المحاولة مرة أخرى.',
+    },
+    'network-request-failed': {
+      en: 'Network error. Please check your internet connection.',
+      ru: 'Ошибка сети. Проверьте подключение к интернету.',
+      es: 'Error de red. Verifica tu conexión a internet.',
+      fr: 'Erreur réseau. Vérifiez votre connexion Internet.',
+      ar: 'خطأ في الشبكة. تحقق من اتصالك بالإنترنت.',
+    },
+    'device_already_registered': {
+      en: 'This device is already linked to another account.',
+      ru: 'Это устройство уже привязано к другому аккаунту.',
+      es: 'Este dispositivo ya está vinculado a otra cuenta.',
+      fr: 'Cet appareil est déjà associé à un autre compte.',
+      ar: 'هذا الجهاز مرتبط بحساب آخر بالفعل.',
+    },
+  };
 
-  if (message.includes('device_already_registered')) {
-    return lang === 'ru' ? 'Это устройство уже привязано к другому аккаунту' : 'Device already registered to another account';
+  for (const [key, map] of Object.entries(authTranslations)) {
+    if (
+      code === `auth/${key}` ||
+      (key === 'invalid-credential' && (code === 'auth/wrong-password' || message.includes('wrong-password'))) ||
+      message.includes(key)
+    ) {
+      return map[l];
+    }
   }
 
   return message;
@@ -472,15 +663,23 @@ export function formatAuthError(err: unknown, lang: string = 'ru'): string {
 export const firebaseClient = {
   auth: {
     async getSession() {
-      const u = auth.currentUser;
-      if (!u) {
-        await new Promise<void>((resolve) => {
-          const unsub = onAuthStateChanged(auth, () => {
-            unsub();
-            resolve();
+      try {
+        if (typeof (auth as any).authStateReady === 'function') {
+          await Promise.race([
+            (auth as any).authStateReady(),
+            new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+          ]);
+        } else if (!auth.currentUser) {
+          await new Promise<void>((resolve) => {
+            const unsub = onAuthStateChanged(auth, () => {
+              unsub();
+              resolve();
+            });
+            setTimeout(resolve, 1500);
           });
-          setTimeout(resolve, 350);
-        });
+        }
+      } catch {
+        // ignore auth state hydration errors
       }
       const finalUser = auth.currentUser;
       return {
@@ -519,12 +718,17 @@ export const firebaseClient = {
               display_name: cred.user.displayName || email.split('@')[0],
               displayName: cred.user.displayName || email.split('@')[0],
               email: cred.user.email,
-              theme: 'dark',
-              lang: 'ru',
+              theme: readPreferredTheme(),
+              lang: readPreferredLang(),
+              accent: 'default',
+              needs_accent_onboarding: false,
+              defaults_v2_migrated: true,
               model: 'instinct',
               agent: 'universal',
               plan: 'free',
               pro_lifetime: false,
+              prompt_usage: { engine: 0, chat: 0, flow: 0, image: 0, resetAt: { engine: 0, chat: 0, flow: 0, image: 0 } },
+              promptUsage: { engine: 0, chat: 0, flow: 0, image: 0, resetAt: { engine: 0, chat: 0, flow: 0, image: 0 } },
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             });
@@ -551,7 +755,13 @@ export const firebaseClient = {
       password: string;
       options?: { emailRedirectTo?: string; data?: any };
     }) {
+      let resolveSetup!: () => void;
+      const setupPromise = new Promise<void>((resolve) => {
+        resolveSetup = resolve;
+      });
+      activeAuthSetupPromise = setupPromise;
       try {
+        const preFp = await getDeviceFingerprint();
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
         const name = options?.data?.display_name || options?.data?.full_name || email.split('@')[0];
         if (name) {
@@ -559,6 +769,10 @@ export const firebaseClient = {
         }
 
         const uid = cred.user.uid;
+        const { usage: baselineUsage, resetAt: baselineResetAt, fp } = await resolveRegistrationPromptUsage(uid, preFp);
+        const baselinePayload = { ...baselineUsage, resetAt: baselineResetAt };
+        const finalFp = fp || options?.data?.device_fingerprint || null;
+
         await setDoc(
           doc(db, 'profiles', uid),
           {
@@ -566,13 +780,19 @@ export const firebaseClient = {
             display_name: name,
             displayName: name,
             email: email.trim(),
-            theme: 'dark',
-            lang: 'ru',
+            theme: options?.data?.theme || readPreferredTheme(),
+            lang: options?.data?.lang || readPreferredLang(),
+            accent: options?.data?.accent || 'default',
+            needs_accent_onboarding: options?.data?.needs_accent_onboarding ?? false,
+            defaults_v2_migrated: true,
             model: 'instinct',
             agent: 'universal',
             plan: 'free',
             pro_lifetime: false,
-            device_fingerprint: options?.data?.device_fingerprint || null,
+            prompt_usage: baselinePayload,
+            promptUsage: baselinePayload,
+            device_fingerprint: finalFp,
+            deviceFingerprint: finalFp,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           },
@@ -585,42 +805,78 @@ export const firebaseClient = {
         };
       } catch (err: any) {
         return { data: { user: null, session: null }, error: err };
+      } finally {
+        resolveSetup();
+        if (activeAuthSetupPromise === setupPromise) {
+          activeAuthSetupPromise = null;
+        }
       }
     },
 
     async signInWithGoogle() {
+      let resolveSetup!: () => void;
+      const setupPromise = new Promise<void>((resolve) => {
+        resolveSetup = resolve;
+      });
+      activeAuthSetupPromise = setupPromise;
       try {
+        // Trigger fingerprint computation in background without awaiting before popup (keeps user gesture intact)
+        const fpPromise = getDeviceFingerprint();
         const cred = await signInWithPopup(auth, googleProvider);
         const uid = cred.user.uid;
+        let isNewUser = Boolean(getAdditionalUserInfo(cred)?.isNewUser);
         try {
           const profileRef = doc(db, 'profiles', uid);
           const profileSnap = await getDoc(profileRef);
-          if (!profileSnap.exists()) {
-            await setDoc(profileRef, {
-              id: uid,
-              display_name: cred.user.displayName || cred.user.email?.split('@')[0] || 'User',
-              displayName: cred.user.displayName || cred.user.email?.split('@')[0] || 'User',
-              email: cred.user.email,
-              theme: 'dark',
-              lang: 'ru',
-              model: 'instinct',
-              agent: 'universal',
-              plan: 'free',
-              pro_lifetime: false,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
+          if (!profileSnap.exists() || isNewUser) {
+            isNewUser = true;
+            const preFp = await fpPromise;
+            const { usage: baselineUsage, resetAt: baselineResetAt, fp } = await resolveRegistrationPromptUsage(uid, preFp);
+            const baselinePayload = { ...baselineUsage, resetAt: baselineResetAt };
+            await setDoc(
+              profileRef,
+              {
+                id: uid,
+                display_name: cred.user.displayName || cred.user.email?.split('@')[0] || 'User',
+                displayName: cred.user.displayName || cred.user.email?.split('@')[0] || 'User',
+                email: cred.user.email,
+                theme: readPreferredTheme(),
+                lang: readPreferredLang(),
+                accent: 'default',
+                needs_accent_onboarding: true,
+                defaults_v2_migrated: true,
+                model: 'instinct',
+                agent: 'universal',
+                plan: 'free',
+                pro_lifetime: false,
+                prompt_usage: baselinePayload,
+                promptUsage: baselinePayload,
+                device_fingerprint: fp || null,
+                deviceFingerprint: fp || null,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              },
+              { merge: true },
+            );
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('igseek:accent-onboarding-required', { detail: { uid } }));
+            }
           }
         } catch (e) {
           console.warn('Profile sync on google signin warning:', e);
         }
 
         return {
-          data: { user: cred.user, session: userToSession(cred.user) },
+          data: { user: cred.user, session: userToSession(cred.user), isNewUser },
           error: null,
         };
       } catch (err: any) {
-        return { data: { user: null, session: null }, error: err };
+        return { data: { user: null, session: null, isNewUser: false }, error: err };
+      } finally {
+        resolveSetup();
+        if (activeAuthSetupPromise === setupPromise) {
+          activeAuthSetupPromise = null;
+        }
       }
     },
 

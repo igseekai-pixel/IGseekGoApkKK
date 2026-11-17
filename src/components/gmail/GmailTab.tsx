@@ -33,12 +33,17 @@ import {
   deleteLocalEmail,
 } from '@/lib/gmail';
 
+import { localeFor, useLang, useT } from '@/lib/i18n';
+
 interface GmailTabProps {
   onAskAiAboutEmail?: (subject: string, body?: string) => void;
   onNavigateToChat?: () => void;
 }
 
 export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps) {
+  const t = useT();
+  const lang = useLang();
+  const dateLocale = localeFor(lang);
   const [isConnected, setIsConnected] = useState<boolean>(!!getCachedGmailToken());
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -103,7 +108,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
       }
     } catch (err: any) {
       console.error('Failed to load Gmail messages:', err);
-      setError(err?.message || 'Не удалось загрузить почту');
+      setError(err?.message || t('Failed to load mail'));
       setMessages(getLocalEmails());
     } finally {
       setLoading(false);
@@ -124,7 +129,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
         await loadData();
       }
     } catch (err: any) {
-      setError(err?.message || 'Ошибка подключения к Gmail');
+      setError(err?.message || t('Gmail connection error'));
     }
   };
 
@@ -149,7 +154,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
       } else {
         saveLocalEmail({
           to: to.trim(),
-          from: 'Вы (Локально)',
+          from: t('You (Local)'),
           subject: subject.trim(),
           body: body.trim(),
           snippet: body.trim().slice(0, 100),
@@ -165,7 +170,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
       setIsComposing(false);
       await loadData();
     } catch (err: any) {
-      setError(err?.message || 'Не удалось отправить письмо');
+      setError(err?.message || t('Failed to send email'));
     } finally {
       setSending(false);
     }
@@ -187,7 +192,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
       }
       setTrashingEmail(null);
     } catch (err: any) {
-      setError(err?.message || 'Не удалось переместить письмо в корзину');
+      setError(err?.message || t('Failed to move email to trash'));
     }
   };
 
@@ -214,20 +219,20 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold tracking-tight text-foreground">Почта (Gmail)</h1>
+              <h1 className="text-xl font-bold tracking-tight text-foreground">{t('Mail (Gmail)')}</h1>
               <span
                 className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border ${
                   isConnected
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
                 }`}
               >
-                <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-                {isConnected ? 'Gmail подключен' : 'Локальный режим'}
+                <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                {isConnected ? t('Gmail connected') : t('Local mode')}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Читайте, отправляйте и анализируйте электронную почту с помощью нейросети IGseek
+              {t('Read, send and analyze emails with IGseek AI')}
             </p>
           </div>
         </div>
@@ -239,14 +244,14 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
               className="glass-button-brand group relative flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold text-white w-full sm:w-auto"
             >
               <Mail className="h-4 w-4" />
-              <span>Подключить Gmail</span>
+              <span>{t('Connect Gmail')}</span>
             </button>
           ) : (
             <button
               onClick={handleDisconnect}
               className="glass-button rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40"
             >
-              Отключить
+              {t('Disconnect')}
             </button>
           )}
 
@@ -255,7 +260,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
               setRefreshing(true);
               loadData();
             }}
-            title="Обновить почту"
+            title={t('Refresh mail')}
             className="glass-button flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground shrink-0"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
@@ -281,15 +286,15 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
           className="glass-button-brand inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold text-white"
         >
           <Plus className="h-4 w-4" />
-          <span>Написать письмо</span>
+          <span>{t('Compose')}</span>
         </button>
 
         {/* Folder Selectors */}
         <div className="flex items-center gap-1.5 overflow-x-auto">
           {[
-            { id: 'INBOX', label: 'Входящие', icon: Inbox },
-            { id: 'SENT', label: 'Отправленные', icon: Send },
-            { id: 'TRASH', label: 'Корзина', icon: Trash2 },
+            { id: 'INBOX', label: t('Inbox'), icon: Inbox },
+            { id: 'SENT', label: t('Sent'), icon: Send },
+            { id: 'TRASH', label: t('Trash'), icon: Trash2 },
           ].map((f) => {
             const Icon = f.icon;
             const active = selectedFolder === f.id;
@@ -315,7 +320,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Поиск писем..."
+            placeholder={t('Search emails…')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full rounded-xl border border-border bg-surface pl-9 pr-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-brand/40 transition-colors"
@@ -335,11 +340,11 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand/10 text-brand mb-3">
             <Mail className="h-6 w-6" />
           </div>
-          <h3 className="text-sm font-semibold text-foreground">Писем не найдено</h3>
+          <h3 className="text-sm font-semibold text-foreground">{t('No emails found')}</h3>
           <p className="text-xs text-muted-foreground mt-1 max-w-xs">
             {searchQuery
-              ? 'Измените параметры поиска'
-              : 'В этой папке пока нет писем. Вы можете написать новое письмо с помощью нейросети.'}
+              ? t('Try adjusting your search query')
+              : t('No emails in this folder yet. You can compose a new one with AI assistance.')}
           </p>
         </div>
       ) : (
@@ -365,7 +370,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                 </div>
 
                 <div className="text-[11px] text-muted-foreground shrink-0">
-                  {new Date(msg.date || Date.now()).toLocaleDateString([], {
+                  {new Date(msg.date || Date.now()).toLocaleDateString(dateLocale, {
                     day: 'numeric',
                     month: 'short',
                     hour: '2-digit',
@@ -389,15 +394,15 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="glass-card w-full max-w-2xl max-h-[85vh] rounded-2xl border border-white/15 bg-surface-elevated/90 p-6 shadow-2xl flex flex-col gap-4 overflow-hidden backdrop-blur-2xl"
+              className="glass-card w-full max-w-2xl max-h-[85vh] rounded-2xl border border-border bg-surface-elevated/90 p-6 shadow-2xl flex flex-col gap-4 overflow-hidden backdrop-blur-2xl"
             >
-              <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
+              <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
                 <div>
                   <h2 className="text-base font-bold text-foreground">{viewingEmail.subject}</h2>
                   <div className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-2">
-                    <span>От: <strong className="text-foreground">{viewingEmail.from}</strong></span>
+                    <span>{t('From:')} <strong className="text-foreground">{viewingEmail.from}</strong></span>
                     <span>•</span>
-                    <span>{new Date(viewingEmail.date || Date.now()).toLocaleString()}</span>
+                    <span>{new Date(viewingEmail.date || Date.now()).toLocaleString(dateLocale)}</span>
                   </div>
                 </div>
 
@@ -406,12 +411,12 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                 </button>
               </div>
 
-              <div className="glass-card flex-1 overflow-y-auto pr-1 text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap bg-background/50 p-4 rounded-xl border border-white/10">
+              <div className="glass-card flex-1 overflow-y-auto pr-1 text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap bg-background/50 p-4 rounded-xl border border-border">
                 {viewingEmail.body || viewingEmail.snippet}
               </div>
 
               {/* Email Footer Actions */}
-              <div className="flex items-center justify-between gap-3 pt-3 border-t border-white/10">
+              <div className="flex items-center justify-between gap-3 pt-3 border-t border-border">
                 <div className="flex items-center gap-2">
                   {onAskAiAboutEmail && (
                     <button
@@ -424,7 +429,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                       className="glass-button inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium text-brand hover:border-brand/40"
                     >
                       <Sparkles className="h-3.5 w-3.5" />
-                      <span>Спросить AI об этом письме</span>
+                      <span>{t('Ask AI about this email')}</span>
                     </button>
                   )}
 
@@ -438,7 +443,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                     className="glass-button inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
                   >
                     <Reply className="h-3.5 w-3.5" />
-                    <span>Ответить</span>
+                    <span>{t('Reply')}</span>
                   </button>
                 </div>
 
@@ -447,7 +452,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                   className="glass-button inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:border-destructive/40 hover:text-destructive"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  <span>Удалить</span>
+                  <span>{t('Delete')}</span>
                 </button>
               </div>
             </motion.div>
@@ -463,11 +468,11 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="glass-card w-full max-w-lg rounded-2xl border border-white/15 bg-surface-elevated/90 p-5 shadow-2xl flex flex-col gap-4 backdrop-blur-2xl"
+              className="glass-card w-full max-w-lg rounded-2xl border border-border bg-surface-elevated/90 p-5 shadow-2xl flex flex-col gap-4 backdrop-blur-2xl"
             >
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center justify-between border-b border-border pb-3">
                 <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Mail className="h-4 w-4 text-brand" /> Новое письмо
+                  <Mail className="h-4 w-4 text-brand" /> {t('New email')}
                 </h3>
                 <button onClick={() => setIsComposing(false)} className="glass-button flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground">
                   <X className="h-4 w-4" />
@@ -477,50 +482,50 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
               <div className="flex flex-col gap-3">
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1 block">
-                    Получатель (To)
+                    {t('Recipient (To)')}
                   </label>
                   <input
                     type="email"
                     placeholder="example@domain.com"
                     value={to}
                     onChange={(e) => setTo(e.target.value)}
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                   />
                 </div>
 
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1 block">
-                    Тема
+                    {t('Subject')}
                   </label>
                   <input
                     type="text"
-                    placeholder="Заголовок письма..."
+                    placeholder={t('Email subject…')}
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                   />
                 </div>
 
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1 block">
-                    Текст письма
+                    {t('Message')}
                   </label>
                   <textarea
-                    placeholder="Напишите текст или попросите AI сформулировать..."
+                    placeholder={t('Write your message or ask AI to draft it…')}
                     value={body}
                     onChange={(e) => setBody(e.target.value)}
                     rows={6}
-                    className="glass-card w-full resize-none rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60 leading-relaxed"
+                    className="glass-card w-full resize-none rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60 leading-relaxed"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
                 <button
                   onClick={() => setIsComposing(false)}
                   className="glass-button rounded-xl px-4 py-2 text-xs text-muted-foreground hover:text-foreground"
                 >
-                  Отмена
+                  {t('Cancel')}
                 </button>
                 <button
                   onClick={() => setConfirmSending(true)}
@@ -528,7 +533,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                   className="glass-button-brand rounded-xl px-4 py-2 text-xs font-semibold text-white disabled:opacity-50 inline-flex items-center gap-1.5"
                 >
                   <Send className="h-3.5 w-3.5" />
-                  <span>Отправить</span>
+                  <span>{t('Send')}</span>
                 </button>
               </div>
             </motion.div>
@@ -551,14 +556,14 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                   <Send className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">Отправить письмо?</h3>
-                  <p className="text-xs text-muted-foreground">Письмо будет отправлено адресату.</p>
+                  <h3 className="text-sm font-semibold text-foreground">{t('Send email?')}</h3>
+                  <p className="text-xs text-muted-foreground">{t('The email will be delivered to the recipient.')}</p>
                 </div>
               </div>
 
-              <div className="glass-card text-xs text-foreground/90 bg-background/50 p-3 rounded-xl border border-white/10 flex flex-col gap-1">
-                <div><strong>Кому:</strong> {to}</div>
-                <div><strong>Тема:</strong> {subject}</div>
+              <div className="glass-card text-xs text-foreground/90 bg-background/50 p-3 rounded-xl border border-border flex flex-col gap-1">
+                <div><strong>{t('To:')}</strong> {to}</div>
+                <div><strong>{t('Subject:')}</strong> {subject}</div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
@@ -566,14 +571,14 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                   onClick={() => setConfirmSending(false)}
                   className="glass-button rounded-xl px-4 py-2 text-xs text-muted-foreground hover:text-foreground"
                 >
-                  Отмена
+                  {t('Cancel')}
                 </button>
                 <button
                   onClick={handleSendEmail}
                   disabled={sending}
                   className="glass-button-brand rounded-xl px-4 py-2 text-xs font-semibold text-white"
                 >
-                  {sending ? 'Отправка...' : 'Да, отправить'}
+                  {sending ? t('Sending…') : t('Yes, send')}
                 </button>
               </div>
             </motion.div>
@@ -596,12 +601,12 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                   <Trash2 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">Переместить письмо в корзину?</h3>
-                  <p className="text-xs text-muted-foreground">Вы сможете восстановить его из корзины в Gmail.</p>
+                  <h3 className="text-sm font-semibold text-foreground">{t('Move email to trash?')}</h3>
+                  <p className="text-xs text-muted-foreground">{t('You can restore it from Gmail Trash later.')}</p>
                 </div>
               </div>
 
-              <p className="glass-card text-xs text-foreground/90 bg-background/50 p-3 rounded-xl border border-white/10">
+              <p className="glass-card text-xs text-foreground/90 bg-background/50 p-3 rounded-xl border border-border">
                 «<span className="font-medium">{trashingEmail.subject}</span>»
               </p>
 
@@ -610,13 +615,13 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                   onClick={() => setTrashingEmail(null)}
                   className="glass-button rounded-xl px-4 py-2 text-xs text-muted-foreground hover:text-foreground"
                 >
-                  Отмена
+                  {t('Cancel')}
                 </button>
                 <button
                   onClick={handleConfirmTrash}
                   className="glass-button-brand rounded-xl !bg-rose-600 px-4 py-2 text-xs font-semibold text-white"
                 >
-                  Переместить
+                  {t('Move to trash')}
                 </button>
               </div>
             </motion.div>

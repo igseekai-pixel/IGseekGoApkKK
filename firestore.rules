@@ -10,6 +10,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
@@ -25,6 +29,60 @@ service cloud.firestore {
       return isSignedIn() && (
         (('user_id' in request.resource.data) && request.resource.data.user_id == request.auth.uid) ||
         (('userId' in request.resource.data) && request.resource.data.userId == request.auth.uid)
+      );
+    }
+
+    function isValidEngineProject(data) {
+      return data.title is string && data.title.size() > 0 && data.title.size() <= 200
+        && data.files is map
+        && (!('chatMessages' in data) || (data.chatMessages is list && data.chatMessages.size() <= 500))
+        && (!('activeFile' in data) || data.activeFile == null || (data.activeFile is string && data.activeFile.size() <= 260))
+        && (!('projectId' in data) || data.projectId == null || (data.projectId is string && data.projectId.size() <= 128));
+    }
+
+    function isValidLibraryFile(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 260
+        && data.type is string && data.type.size() > 0 && data.type.size() <= 50
+        && (!('content' in data) || data.content == null || (data.content is string && data.content.size() <= 900000))
+        && (!('projectId' in data) || data.projectId == null || (data.projectId is string && data.projectId.size() <= 128))
+        && (!('taskTitle' in data) || data.taskTitle == null || (data.taskTitle is string && data.taskTitle.size() <= 200))
+        && (!('source' in data) || data.source == null || (data.source is string && data.source.size() <= 40));
+    }
+
+    function isValidDeviceLimits(data) {
+      return data.keys().hasAll(['engine', 'chat', 'flow', 'updatedAt'])
+        && data.keys().hasOnly(['engine', 'chat', 'flow', 'image', 'engineResetAt', 'chatResetAt', 'flowResetAt', 'imageResetAt', 'updatedAt', 'updated_at'])
+        && data.engine is int && data.engine >= 0 && data.engine <= 18
+        && data.chat is int && data.chat >= 0 && data.chat <= 1000000
+        && data.flow is int && data.flow >= 0 && data.flow <= 18
+        && (!('image' in data) || (data.image is int && data.image >= 0 && data.image <= 8))
+        && (!('engineResetAt' in data) || (data.engineResetAt is int && data.engineResetAt >= 0))
+        && (!('chatResetAt' in data) || (data.chatResetAt is int && data.chatResetAt >= 0))
+        && (!('flowResetAt' in data) || (data.flowResetAt is int && data.flowResetAt >= 0))
+        && (!('imageResetAt' in data) || (data.imageResetAt is int && data.imageResetAt >= 0))
+        && data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64
+        && (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() > 0 && data.updated_at.size() <= 64));
+    }
+
+    function canTransitionResetAt(newCount, limit, hasOldReset, oldReset, newReset, minDelayMs) {
+      return (newCount < limit && newReset == 0)
+        || (newCount == limit && (
+          (hasOldReset && oldReset is int && oldReset > 0 && newReset >= oldReset)
+          || ((!hasOldReset || oldReset == 0) && newReset >= request.time.toMillis() + minDelayMs)
+        ));
+    }
+
+    function canUpdateDeviceScope(newCount, oldCount, limit, hasOldReset, oldReset, newReset, minDelayMs) {
+      return (
+        newCount >= oldCount - 1
+        && canTransitionResetAt(newCount, limit, hasOldReset, oldReset, newReset, minDelayMs)
+      ) || (
+        newCount == 0
+        && hasOldReset
+        && oldReset is int
+        && oldReset > 0
+        && request.time.toMillis() >= oldReset
+        && newReset == 0
       );
     }
 
@@ -44,20 +102,22 @@ service cloud.firestore {
         (('userId' in resource.data) && resource.data.userId == request.auth.uid)
       );
       allow create: if isIncomingOwner();
-      allow update: if isDocOwner();
+      allow update: if isDocOwner() && isIncomingOwner();
 
       // Subcollection messages: /chats/{chatId}/messages/{messageId}
       match /messages/{messageId} {
         allow get, list, delete: if isDocOwner() || (
-          get(/databases/$(database)/documents/chats/$(chatId)).data.user_id == request.auth.uid ||
-          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
+          isSignedIn() && (
+            get(/databases/$(database)/documents/chats/$(chatId)).data.user_id == request.auth.uid ||
+            get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
+          )
         );
         allow create: if isSignedIn() && (
           isIncomingOwner() ||
           get(/databases/$(database)/documents/chats/$(chatId)).data.user_id == request.auth.uid ||
           get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid
         );
-        allow update: if isDocOwner();
+        allow update: if isDocOwner() && isIncomingOwner();
       }
     }
 
@@ -69,7 +129,7 @@ service cloud.firestore {
         (('userId' in resource.data) && resource.data.userId == request.auth.uid)
       );
       allow create: if isIncomingOwner();
-      allow update: if isDocOwner();
+      allow update: if isDocOwner() && isIncomingOwner();
     }
 
     // Projects: /projects/{projectId}
@@ -80,7 +140,31 @@ service cloud.firestore {
         (('userId' in resource.data) && resource.data.userId == request.auth.uid)
       );
       allow create: if isIncomingOwner();
-      allow update: if isDocOwner();
+      allow update: if isDocOwner() && isIncomingOwner();
+    }
+
+    // Engine Projects: /engine_projects/{projectId}
+    match /engine_projects/{projectId} {
+      allow get: if isValidId(projectId) && isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isValidId(projectId) && isIncomingOwner() && isValidEngineProject(request.resource.data);
+      allow update: if isValidId(projectId) && isDocOwner() && isIncomingOwner() && isValidEngineProject(request.resource.data);
+      allow delete: if isValidId(projectId) && isDocOwner();
+    }
+
+    // Library Files: /library_files/{fileId}
+    match /library_files/{fileId} {
+      allow get: if isValidId(fileId) && isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isValidId(fileId) && isIncomingOwner() && isValidLibraryFile(request.resource.data);
+      allow update: if isValidId(fileId) && isDocOwner() && isIncomingOwner() && isValidLibraryFile(request.resource.data);
+      allow delete: if isValidId(fileId) && isDocOwner();
     }
 
     // Memories: /memories/{memoryId}
@@ -91,7 +175,7 @@ service cloud.firestore {
         (('userId' in resource.data) && resource.data.userId == request.auth.uid)
       );
       allow create: if isIncomingOwner();
-      allow update: if isDocOwner();
+      allow update: if isDocOwner() && isIncomingOwner();
     }
 
     // Payments: /payments/{paymentId}
@@ -103,6 +187,72 @@ service cloud.firestore {
       );
       allow create: if isIncomingOwner();
       allow update, delete: if false;
+    }
+
+    // Flow Tasks: /flow_tasks/{taskId}
+    match /flow_tasks/{taskId} {
+      allow get, delete: if isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isIncomingOwner();
+      allow update: if isDocOwner() && isIncomingOwner();
+    }
+
+    // Flow Scenarios: /flow_scenarios/{scenarioId}
+    match /flow_scenarios/{scenarioId} {
+      allow get, delete: if isDocOwner();
+      allow list: if isSignedIn() && (
+        (('user_id' in resource.data) && resource.data.user_id == request.auth.uid) ||
+        (('userId' in resource.data) && resource.data.userId == request.auth.uid)
+      );
+      allow create: if isIncomingOwner();
+      allow update: if isDocOwner() && isIncomingOwner();
+    }
+
+    // Device Limits: /device_limits/{fpHash}
+    match /device_limits/{fpHash} {
+      allow get: if isSignedIn() && isValidId(fpHash);
+      allow list: if false;
+      allow create: if isSignedIn()
+        && isValidId(fpHash)
+        && isValidDeviceLimits(request.resource.data)
+        && (request.resource.data.engine < 18 || !('engineResetAt' in request.resource.data) || request.resource.data.engineResetAt == 0 || request.resource.data.engineResetAt > request.time.toMillis())
+        && (request.resource.data.flow < 18 || !('flowResetAt' in request.resource.data) || request.resource.data.flowResetAt == 0 || request.resource.data.flowResetAt > request.time.toMillis())
+        && (!('image' in request.resource.data) || request.resource.data.image < 8 || !('imageResetAt' in request.resource.data) || request.resource.data.imageResetAt == 0 || request.resource.data.imageResetAt > request.time.toMillis());
+      allow update: if isSignedIn()
+        && isValidId(fpHash)
+        && isValidDeviceLimits(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['engine', 'chat', 'flow', 'image', 'engineResetAt', 'chatResetAt', 'flowResetAt', 'imageResetAt', 'updatedAt', 'updated_at'])
+        && canUpdateDeviceScope(
+          request.resource.data.engine,
+          resource.data.engine,
+          18,
+          'engineResetAt' in resource.data,
+          'engineResetAt' in resource.data ? resource.data.engineResetAt : 0,
+          'engineResetAt' in request.resource.data ? request.resource.data.engineResetAt : 0,
+          41400000
+        )
+        && canUpdateDeviceScope(
+          request.resource.data.flow,
+          resource.data.flow,
+          18,
+          'flowResetAt' in resource.data,
+          'flowResetAt' in resource.data ? resource.data.flowResetAt : 0,
+          'flowResetAt' in request.resource.data ? request.resource.data.flowResetAt : 0,
+          41400000
+        )
+        && canUpdateDeviceScope(
+          'image' in request.resource.data ? request.resource.data.image : 0,
+          'image' in resource.data ? resource.data.image : 0,
+          8,
+          'imageResetAt' in resource.data,
+          'imageResetAt' in resource.data ? resource.data.imageResetAt : 0,
+          'imageResetAt' in request.resource.data ? request.resource.data.imageResetAt : 0,
+          82800000
+        );
+      allow delete: if false;
     }
   }
 }

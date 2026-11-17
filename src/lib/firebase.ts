@@ -10,6 +10,7 @@ import {
   updatePassword,
   updateProfile,
   onAuthStateChanged,
+  getAdditionalUserInfo,
   type User,
 } from 'firebase/auth';
 import {
@@ -108,6 +109,7 @@ export {
   updatePassword,
   updateProfile,
   onAuthStateChanged,
+  getAdditionalUserInfo,
   doc,
   getDoc,
   setDoc,

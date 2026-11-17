@@ -38,12 +38,17 @@ import {
   type CalendarEvent,
 } from '@/lib/google-calendar';
 
+import { localeFor, useLang, useT } from '@/lib/i18n';
+
 interface CalendarTabProps {
   onAskAiAboutEvent?: (eventSummary: string, eventTime?: string) => void;
   onNavigateToChat?: () => void;
 }
 
 export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTabProps) {
+  const t = useT();
+  const lang = useLang();
+  const dateLocale = localeFor(lang);
   const [connected, setConnected] = useState<boolean>(!!getCachedCalendarToken());
   const [loading, setLoading] = useState<boolean>(false);
   const [connecting, setConnecting] = useState<boolean>(false);
@@ -107,9 +112,9 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         } catch (err: any) {
           console.warn('Failed to fetch Google Calendar events:', err);
           if (err.message?.includes('expired') || err.message?.includes('401')) {
-            setError('Сессия Google Календаря истекла. Пожалуйста, подключитесь снова.');
+            setError(t('Google Calendar session expired. Please reconnect.'));
           } else {
-            setError('Не удалось загрузить события из Google Календаря. Проверьте подключение.');
+            setError(t('Failed to load Google Calendar events. Check your connection.'));
           }
         }
       }
@@ -119,7 +124,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
       const combined = [...googleEvents, ...localList];
       setEvents(combined);
     } catch (err: any) {
-      setError(err.message || 'Ошибка загрузки событий');
+      setError(err.message || t('Error loading events'));
     } finally {
       setLoading(false);
     }
@@ -135,7 +140,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         await loadEvents();
       }
     } catch (err: any) {
-      setError(err.message || 'Не удалось подключить Google Календарь');
+      setError(err.message || t('Failed to connect Google Calendar'));
     } finally {
       setConnecting(false);
     }
@@ -244,7 +249,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
       setCreateModalOpen(false);
       await loadEvents();
     } catch (err: any) {
-      setError(err.message || 'Ошибка сохранения события');
+      setError(err.message || t('Error saving event'));
     } finally {
       setSaving(false);
     }
@@ -262,7 +267,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
       setDeletingEvent(null);
       await loadEvents();
     } catch (err: any) {
-      setError(err.message || 'Не удалось удалить событие');
+      setError(err.message || t('Failed to delete event'));
     } finally {
       setLoading(false);
     }
@@ -323,22 +328,22 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-semibold tracking-tight text-foreground">
-                  Календарь и Напоминания
+                  {t('Calendar & Reminders')}
                 </h2>
                 {connected ? (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Google Календарь подключен
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    {t('Google Calendar connected')}
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
                     <AlertCircle className="h-3 w-3" />
-                    Локальный режим
+                    {t('Local mode')}
                   </span>
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Планируйте встречи, ставьте даты и работайте с событиями напрямую и через AI-агента.
+                {t('Schedule meetings, set dates and manage events directly or via AI agent.')}
               </p>
             </div>
           </div>
@@ -361,7 +366,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                     <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
                   </svg>
                 )}
-                <span>Подключить Google Календарь</span>
+                <span>{t('Connect Google Calendar')}</span>
               </button>
             ) : (
               <button
@@ -369,7 +374,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                 onClick={handleDisconnect}
                 className="glass-button rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40"
               >
-                Отключить Google
+                {t('Disconnect Google')}
               </button>
             )}
 
@@ -379,7 +384,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
               className="glass-button-brand inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold text-white"
             >
               <Plus className="h-4 w-4" />
-              <span>Создать событие</span>
+              <span>{t('Create event')}</span>
             </button>
           </div>
         </div>
@@ -390,11 +395,11 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-1.5 overflow-x-auto py-1">
             {[
-              { id: 'upcoming', label: 'Ближайшие', icon: Clock },
-              { id: 'today', label: 'Сегодня', icon: CalendarDays },
-              { id: 'week', label: 'Неделя', icon: CalendarRange },
-              { id: 'month', label: 'Месяц', icon: CalendarIcon },
-              { id: 'local', label: 'Напоминания', icon: Bell },
+              { id: 'upcoming', label: t('Upcoming'), icon: Clock },
+              { id: 'today', label: t('Today'), icon: CalendarDays },
+              { id: 'week', label: t('Week'), icon: CalendarRange },
+              { id: 'month', label: t('Month'), icon: CalendarIcon },
+              { id: 'local', label: t('Reminders'), icon: Bell },
             ].map((f) => {
               const IconComp = f.icon;
               const active = filterView === f.id;
@@ -422,7 +427,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Поиск по событиям…"
+                placeholder={t('Search events…')}
                 className="w-full rounded-lg border border-border bg-background pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-brand/60 focus:ring-1 focus:ring-brand/60"
               />
               {searchQuery && (
@@ -438,7 +443,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
             <button
               onClick={() => void loadEvents()}
               disabled={loading}
-              title="Обновить календарь"
+              title={t('Refresh calendar')}
               className="glass-button p-2 rounded-xl text-muted-foreground hover:text-foreground disabled:opacity-50"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -449,12 +454,12 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
 
       {/* Error notification banner if any */}
       {error && (
-        <div className="shrink-0 border-b border-rose-500/20 bg-rose-500/10 px-4 py-2 text-xs text-rose-300 flex items-center justify-between">
+        <div className="shrink-0 border-b border-rose-500/20 bg-rose-500/10 px-4 py-2 text-xs text-rose-500 dark:text-rose-300 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-500 dark:text-rose-400" />
             <span>{error}</span>
           </div>
-          <button onClick={() => setError(null)} className="glass-button p-1 rounded-md text-rose-400 hover:text-rose-200">
+          <button onClick={() => setError(null)} className="glass-button p-1 rounded-md text-rose-500 dark:text-rose-400 hover:opacity-80">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -465,18 +470,18 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         {loading && events.length === 0 ? (
           <div className="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin text-brand" />
-            Загружаем события календаря…
+            {t('Loading calendar events…')}
           </div>
         ) : filteredEvents.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center text-center">
-            <div className="glass-card flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-surface-elevated/40 text-muted-foreground">
+            <div className="glass-card flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-surface-elevated/40 text-muted-foreground">
               <CalendarIcon className="h-6 w-6" />
             </div>
-            <h3 className="mt-3 text-sm font-semibold text-foreground">Событий не найдено</h3>
+            <h3 className="mt-3 text-sm font-semibold text-foreground">{t('No events found')}</h3>
             <p className="mt-1 text-xs text-muted-foreground max-w-sm">
               {searchQuery
-                ? 'По вашему запросу ничего не найдено.'
-                : 'У вас нет запланированных событий или напоминаний в этом периоде.'}
+                ? t('No results match your search.')
+                : t('You have no scheduled events or reminders in this period.')}
             </p>
             <button
               type="button"
@@ -484,7 +489,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
               className="glass-button-brand mt-4 inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold text-white"
             >
               <Plus className="h-4 w-4" />
-              <span>Запланировать встречу или напоминание</span>
+              <span>{t('Schedule meeting or reminder')}</span>
             </button>
           </div>
         ) : (
@@ -499,20 +504,20 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
 
               const isAllDay = !evt.start.dateTime && !!evt.start.date;
               const dateFormatted = startDt
-                ? startDt.toLocaleDateString('ru-RU', {
+                ? startDt.toLocaleDateString(dateLocale, {
                     weekday: 'short',
                     day: 'numeric',
                     month: 'short',
                     year: 'numeric',
                   })
-                : 'Дата не указана';
+                : t('No date specified');
 
               const timeFormatted = isAllDay
-                ? 'Весь день'
+                ? t('All day')
                 : startDt && endDt
-                ? `${startDt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} – ${endDt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+                ? `${startDt.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })} – ${endDt.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })}`
                 : startDt
-                ? startDt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                ? startDt.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })
                 : '';
 
               return (
@@ -520,13 +525,13 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                   key={evt.id}
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="glass-card group relative overflow-hidden rounded-2xl border border-white/10 bg-surface/70 p-4 transition-all hover:border-brand/40 shadow-xs backdrop-blur-xl"
+                  className="glass-card group relative overflow-hidden rounded-2xl border border-border bg-surface/70 p-4 transition-all hover:border-brand/40 shadow-xs backdrop-blur-xl"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="mt-0.5 flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-xl bg-brand/10 border border-brand/20 text-brand">
                         <span className="text-[10px] font-bold uppercase leading-none">
-                          {startDt ? startDt.toLocaleDateString('ru-RU', { month: 'short' }).slice(0, 3) : 'Заметка'}
+                          {startDt ? startDt.toLocaleDateString(dateLocale, { month: 'short' }).slice(0, 3) : t('Note')}
                         </span>
                         <span className="text-sm font-black leading-none mt-0.5">
                           {startDt ? startDt.getDate() : '•'}
@@ -538,7 +543,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                           <h4 className="text-sm font-semibold text-foreground truncate">{evt.summary}</h4>
                           {evt.isReminder && (
                             <span className="rounded-md border border-brand/30 bg-brand/10 px-1.5 py-0.5 text-[10px] font-medium text-brand">
-                              Напоминание
+                              {t('Reminder')}
                             </span>
                           )}
                         </div>
@@ -549,8 +554,8 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                             {dateFormatted} {timeFormatted && `· ${timeFormatted}`}
                           </span>
                           {evt.location && (
-                            <span className="flex items-center gap-1 text-zinc-300">
-                              <MapPin className="h-3 w-3 text-amber-400" />
+                            <span className="flex items-center gap-1 text-foreground/80">
+                              <MapPin className="h-3 w-3 text-amber-500" />
                               {evt.location}
                             </span>
                           )}
@@ -564,7 +569,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 self-end sm:self-center shrink-0 border-t border-white/5 pt-2 sm:border-t-0 sm:pt-0">
+                    <div className="flex items-center gap-2 self-end sm:self-center shrink-0 border-t border-border/40 pt-2 sm:border-t-0 sm:pt-0">
                       {/* AI Chat button */}
                       {onAskAiAboutEvent && (
                         <button
@@ -574,10 +579,10 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                             onNavigateToChat?.();
                           }}
                           className="glass-button flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand hover:border-brand/50"
-                          title="Обсудить это событие с AI"
+                          title={t('Discuss this event with AI')}
                         >
                           <Sparkles className="h-3.5 w-3.5" />
-                          <span className="hidden md:inline">Спросить AI</span>
+                          <span className="hidden md:inline">{t('Ask AI')}</span>
                         </button>
                       )}
 
@@ -588,7 +593,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                           target="_blank"
                           rel="noopener noreferrer"
                           className="glass-button flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-                          title="Открыть в Google Календаре"
+                          title={t('Open in Google Calendar')}
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
                         </a>
@@ -599,7 +604,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                         type="button"
                         onClick={() => openCreateModal(evt)}
                         className="glass-button rounded-lg p-1.5 text-muted-foreground hover:text-foreground"
-                        title="Редактировать"
+                        title={t('Edit')}
                       >
                         <Edit2 className="h-3.5 w-3.5" />
                       </button>
@@ -609,7 +614,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                         type="button"
                         onClick={() => setDeletingEvent(evt)}
                         className="glass-button rounded-lg p-1.5 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
-                        title="Удалить"
+                        title={t('Delete')}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -640,30 +645,30 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
               </button>
 
               <h3 className="text-lg font-semibold text-foreground">
-                {editingEvent ? 'Редактировать событие' : 'Создать событие / напоминание'}
+                {editingEvent ? t('Edit event') : t('Create event / reminder')}
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {connected
-                  ? 'Событие сохранится в вашем Google Календаре.'
-                  : 'Событие сохранится в ваших локальных напоминаниях.'}
+                  ? t('The event will be saved to your Google Calendar.')
+                  : t('The event will be saved to your local reminders.')}
               </p>
 
               <form onSubmit={handleSaveEvent} className="mt-4 space-y-3.5">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-foreground">Название *</label>
+                  <label className="mb-1 block text-xs font-medium text-foreground">{t('Title *')}</label>
                   <input
                     type="text"
                     required
                     value={formSummary}
                     onChange={(e) => setFormSummary(e.target.value)}
-                    placeholder="Созвон по проекту / Встреча / Купить продукты"
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3.5 py-2 text-sm text-foreground outline-none focus:border-brand/60"
+                    placeholder={t('Project call / Meeting / Buy groceries')}
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3.5 py-2 text-sm text-foreground outline-none focus:border-brand/60"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-foreground">Дата начала</label>
+                    <label className="mb-1 block text-xs font-medium text-foreground">{t('Start date')}</label>
                     <input
                       type="date"
                       required
@@ -672,81 +677,81 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                         setFormStartDate(e.target.value);
                         if (e.target.value > formEndDate) setFormEndDate(e.target.value);
                       }}
-                      className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                      className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                     />
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-foreground">Время начала</label>
+                    <label className="mb-1 block text-xs font-medium text-foreground">{t('Start time')}</label>
                     <input
                       type="time"
                       required
                       value={formStartTime}
                       onChange={(e) => setFormStartTime(e.target.value)}
-                      className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                      className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-foreground">Дата окончания</label>
+                    <label className="mb-1 block text-xs font-medium text-foreground">{t('End date')}</label>
                     <input
                       type="date"
                       required
                       value={formEndDate}
                       onChange={(e) => setFormEndDate(e.target.value)}
-                      className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                      className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                     />
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-foreground">Время окончания</label>
+                    <label className="mb-1 block text-xs font-medium text-foreground">{t('End time')}</label>
                     <input
                       type="time"
                       required
                       value={formEndTime}
                       onChange={(e) => setFormEndTime(e.target.value)}
-                      className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                      className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-foreground">Место / Ссылка на встречу</label>
+                  <label className="mb-1 block text-xs font-medium text-foreground">{t('Location / Meeting link')}</label>
                   <input
                     type="text"
                     value={formLocation}
                     onChange={(e) => setFormLocation(e.target.value)}
-                    placeholder="Google Meet / Офис / Переговорная #3"
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3.5 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                    placeholder={t('Google Meet / Office / Room #3')}
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3.5 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                   />
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-foreground">Напомнить за</label>
+                  <label className="mb-1 block text-xs font-medium text-foreground">{t('Remind before')}</label>
                   <select
                     value={formReminderMins}
                     onChange={(e) => setFormReminderMins(Number(e.target.value))}
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                   >
-                    <option value={0}>В момент начала</option>
-                    <option value={10}>За 10 минут</option>
-                    <option value={15}>За 15 минут</option>
-                    <option value={30}>За 30 минут</option>
-                    <option value={60}>За 1 час</option>
-                    <option value={1440}>За 1 день</option>
+                    <option value={0}>{t('At start time')}</option>
+                    <option value={10}>{t('10 minutes before')}</option>
+                    <option value={15}>{t('15 minutes before')}</option>
+                    <option value={30}>{t('30 minutes before')}</option>
+                    <option value={60}>{t('1 hour before')}</option>
+                    <option value={1440}>{t('1 day before')}</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-foreground">Описание / Заметки</label>
+                  <label className="mb-1 block text-xs font-medium text-foreground">{t('Description / Notes')}</label>
                   <textarea
                     rows={2}
                     value={formDescription}
                     onChange={(e) => setFormDescription(e.target.value)}
-                    placeholder="Повестка встречи, списки или детали…"
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3.5 py-2 text-xs text-foreground outline-none focus:border-brand/60 resize-none"
+                    placeholder={t('Meeting agenda, lists or details…')}
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3.5 py-2 text-xs text-foreground outline-none focus:border-brand/60 resize-none"
                   />
                 </div>
 
@@ -756,7 +761,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                     onClick={() => setCreateModalOpen(false)}
                     className="glass-button rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
                   >
-                    Отмена
+                    {t('Cancel')}
                   </button>
 
                   <button
@@ -769,7 +774,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                     ) : (
                       <Check className="h-4 w-4" />
                     )}
-                    <span>{editingEvent ? 'Сохранить изменения' : 'Создать событие'}</span>
+                    <span>{editingEvent ? t('Save changes') : t('Create event')}</span>
                   </button>
                 </div>
               </form>
@@ -789,20 +794,20 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
               className="glass-card relative w-full max-w-md rounded-2xl border border-rose-500/30 bg-surface/90 p-6 shadow-2xl backdrop-blur-2xl"
             >
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-500/10 text-rose-400">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-500/10 text-rose-500">
                   <AlertCircle className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-semibold text-foreground">Удалить событие?</h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">Это действие нельзя будет отменить.</p>
+                  <h3 className="text-base font-semibold text-foreground">{t('Delete event?')}</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('This action cannot be undone.')}</p>
                 </div>
               </div>
 
-              <div className="glass-card my-4 rounded-xl border border-white/10 bg-background/50 p-3 text-xs">
+              <div className="glass-card my-4 rounded-xl border border-border bg-background/50 p-3 text-xs">
                 <div className="font-semibold text-foreground">{deletingEvent.summary}</div>
                 {deletingEvent.start.dateTime && (
                   <div className="text-muted-foreground mt-1">
-                    {new Date(deletingEvent.start.dateTime).toLocaleString('ru-RU')}
+                    {new Date(deletingEvent.start.dateTime).toLocaleString(dateLocale)}
                   </div>
                 )}
               </div>
@@ -813,7 +818,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                   onClick={() => setDeletingEvent(null)}
                   className="glass-button rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
                 >
-                  Отмена
+                  {t('Cancel')}
                 </button>
 
                 <button
@@ -823,7 +828,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                   className="glass-button-brand flex items-center gap-1.5 rounded-xl !bg-rose-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                  <span>Да, удалить</span>
+                  <span>{t('Yes, delete')}</span>
                 </button>
               </div>
             </motion.div>

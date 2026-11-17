@@ -90,13 +90,31 @@ export function checkContent(text: string): { blocked: true; category: FilterCat
   return { blocked: false };
 }
 
-export function refusalMessage(category: FilterCategory, lang: "ru" | "en" = "ru"): string {
-  if (lang === "en") {
+export function refusalMessage(
+  category: FilterCategory,
+  lang: "en" | "ru" | "es" | "fr" | "ar" = "en"
+): string {
+  if (lang === "ru") {
     return category === "terrorism"
-      ? "I can't help with planning, organizing or supporting terrorist activity. If you or someone else is in danger, please contact local emergency services."
-      : "I can't provide instructions, schematics or guidance for manufacturing, modifying or acquiring weapons of any kind (firearms, explosives, chemical, biological or nuclear).";
+      ? "Я не помогаю с планированием, организацией или поддержкой террористической деятельности — ни схемами, ни советами, ни в какой форме. Если кому-то угрожает опасность, обратись в экстренные службы."
+      : "Я не даю инструкций, схем и рекомендаций по изготовлению, модификации или получению оружия любого вида — огнестрельного, взрывчатого, холодного, химического, биологического или ядерного.";
+  }
+  if (lang === "es") {
+    return category === "terrorism"
+      ? "No puedo ayudar con la planificación, organización o apoyo de actividades terroristas. Si tú o alguien más está en peligro, contacta a los servicios de emergencia locales."
+      : "No puedo proporcionar instrucciones, esquemas ni guías para fabricar, modificar o adquirir armas de ningún tipo (armas de fuego, explosivos, químicas, biológicas o nucleares).";
+  }
+  if (lang === "fr") {
+    return category === "terrorism"
+      ? "Je ne peux pas aider à planifier, organiser ou soutenir des activités terroristes. Si vous ou quelqu'un d'autre êtes en danger, contactez les services d'urgence locaux."
+      : "Je ne peux pas fournir d'instructions, de schémas ou de conseils pour fabriquer, modifier ou acquérir des armes de quelque nature que ce soit (armes à feu, explosifs, armes chimiques, biologiques ou nucléaires).";
+  }
+  if (lang === "ar") {
+    return category === "terrorism"
+      ? "لا يمكنني المساعدة في التخطيط لأنشطة إرهابية أو تنظيمها أو دعمها. إذا كنت أنت أو أي شخص آخر في خطر، يرجى الاتصال بخدمات الطوارئ المحلية."
+      : "لا يمكنني تقديم تعليمات أو مخططات أو إرشادات لتصنيع أو تعديل أو الحصول على أسلحة من أي نوع (نارية أو متفجرات أو كيميائية أو بيولوجية أو نووية).";
   }
   return category === "terrorism"
-    ? "Я не помогаю с планированием, организацией или поддержкой террористической деятельности — ни схемами, ни советами, ни в какой форме. Если кому-то угрожает опасность, обратись в экстренные службы."
-    : "Я не даю инструкций, схем и рекомендаций по изготовлению, модификации или получению оружия любого вида — огнестрельного, взрывчатого, холодного, химического, биологического или ядерного.";
+    ? "I can't help with planning, organizing or supporting terrorist activity. If you or someone else is in danger, please contact local emergency services."
+    : "I can't provide instructions, schematics or guidance for manufacturing, modifying or acquiring weapons of any kind (firearms, explosives, chemical, biological or nuclear).";
 }

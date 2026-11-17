@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -27,24 +27,64 @@ import {
   Loader2,
   Sun,
   Moon,
+  AudioLines,
+  Mic,
+  PhoneCall,
+  Radio,
+  ChevronDown,
 } from "lucide-react";
 
 import logoAsset from "@/assets/igseek-logo.png";
 import trailerAsset from "@/assets/welcome-trailer.mp4.asset.json";
-import { useT } from "@/lib/i18n";
+import { syncDocumentLang, useLang, useT, type LangCode } from "@/lib/i18n";
 import { useTheme } from "@/lib/theme";
+import { auth } from "@/lib/firebase";
+import { firebaseClient } from "@/lib/firebase-service";
+
+const LANDING_LANGUAGES: { code: LangCode; native: string }[] = [
+  { code: "en", native: "English" },
+  { code: "ru", native: "Русский" },
+  { code: "es", native: "Español" },
+  { code: "fr", native: "Français" },
+  { code: "ar", native: "العربية" },
+];
 
 export const Route = createFileRoute("/")({
+  beforeLoad: async () => {
+    if (typeof window === "undefined") return;
+    const { data } = await firebaseClient.auth.getSession();
+    const hasGuestAccount = (() => {
+      try {
+        const raw = window.localStorage.getItem("igseek:guest");
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        return typeof parsed?.name === "string" && parsed.name.trim().length > 0;
+      } catch {
+        return false;
+      }
+    })();
+    if (data.session?.user || hasGuestAccount) {
+      if (data.session?.user) {
+        try {
+          window.localStorage.setItem("igseek:has_logged_in", "1");
+        } catch {}
+      }
+      throw redirect({ to: "/app", replace: true });
+    }
+    try {
+      window.localStorage.removeItem("igseek:has_logged_in");
+    } catch {}
+  },
   head: () => ({
     meta: [
       { title: "IGseek — AI copilot for creators & builders" },
       {
         name: "description",
         content:
-          "IGseek — специализированные AI-агенты, reasoning-режим и артефакты кода в одном чате. Красно-чёрный минимализм, скорость и глубина.",
+          "IGseek — specialized AI agents, reasoning mode and code artifacts in one chat. Minimalism, speed and depth.",
       },
       { property: "og:title", content: "IGseek — AI copilot for creators & builders" },
-      { property: "og:description", content: "IGseek — специализированные AI-агенты, reasoning-режим и артефакты кода в одном чате. Красно-чёрный минимализм, скорость и глубина." },
+      { property: "og:description", content: "IGseek — specialized AI agents, reasoning mode and code artifacts in one chat. Minimalism, speed and depth." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -52,22 +92,26 @@ export const Route = createFileRoute("/")({
   component: Landing,
 });
 
-type TabKey = "engine" | "models";
+type TabKey = "engine" | "wave" | "models";
 
-const NAV: { label: string; key: TabKey }[] = [
+const NAV: { label: string; key: TabKey; soon?: boolean }[] = [
   { label: "ENGINE", key: "engine" },
+  { label: "WAVE", key: "wave", soon: true },
   { label: "MODELS", key: "models" },
 ];
 
 function Logo({ size = 24 }: { size?: number }) {
   return (
-    <img
-      src={logoAsset}
-      alt="IGseek"
-      width={size}
-      height={size}
-      className="logo-mark rounded-md object-contain"
-      style={{ width: size, height: size }}
+    <span
+      role="img"
+      aria-label="IGseek"
+      className="logo-mark inline-block shrink-0"
+      style={{
+        width: size,
+        height: size,
+        WebkitMaskImage: `url(${logoAsset})`,
+        maskImage: `url(${logoAsset})`,
+      }}
     />
   );
 }
@@ -126,6 +170,15 @@ const ENGINE_FEATURES = [
   { icon: ArrowUpRight, title: "Export", desc: "Download the archive and continue locally." },
 ];
 
+const WAVE_FEATURES = [
+  { icon: Mic, title: "Voice without typing", desc: "Talk to AI by voice without having to type messages." },
+  { icon: Volume2, title: "AI voice replies", desc: "Receive live spoken responses directly from the AI." },
+  { icon: Radio, title: "Real-time dialogues", desc: "Have full two-way conversations in real time." },
+  { icon: AudioLines, title: "Natural interruptions", desc: "Interrupt the AI and continue the conversation naturally." },
+  { icon: Sparkles, title: "Microphone access", desc: "Use your microphone to talk directly with the assistant." },
+  { icon: PhoneCall, title: "Like a phone call", desc: "Communicate more naturally, almost like on a regular phone call." },
+];
+
 
 
 
@@ -176,7 +229,7 @@ function AgentsPanel() {
     <PanelShell>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-pixel text-xs uppercase tracking-[0.3em] text-foreground font-semibold">Agents</p>
+          <p className="font-pixel text-xs uppercase tracking-[0.3em] text-foreground font-semibold">{t("Agents")}</p>
           <h2 className="font-serif-i mt-1 text-3xl sm:text-5xl text-foreground">{t("Six minds. One chat.")}</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             {t("Each agent is a distinct character and knowledge profile. Switch instantly without losing context.")}
@@ -212,13 +265,13 @@ function EnginePanel() {
     <PanelShell>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-pixel text-xs uppercase tracking-[0.3em] text-foreground font-semibold">{t("Engine · soon")}</p>
+          <p className="font-pixel text-xs uppercase tracking-[0.3em] text-foreground font-semibold">{t("Engine")}</p>
           <h2 className="font-serif-i mt-1 text-3xl sm:text-5xl text-foreground">{t("Vibe-code entire projects.")}</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            {t("A tool where AI writes real files and you download the finished project. Coming in the next update.")}
+            {t("A tool where AI writes real files and you download the finished project.")}
           </p>
         </div>
-        <GoToChatButton label={t("Back to chat")} />
+        <GoToChatButton label={t("Open Engine")} />
       </div>
       <motion.div variants={stagger} initial="hidden" animate="show" className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {ENGINE_FEATURES.map((f) => (
@@ -236,8 +289,47 @@ function EnginePanel() {
           </motion.div>
         ))}
       </motion.div>
+    </PanelShell>
+  );
+}
+
+function WavePanel() {
+  const t = useT();
+  return (
+    <PanelShell>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <p className="font-pixel text-xs uppercase tracking-[0.3em] text-foreground font-semibold">{t("Wave · soon")}</p>
+            <span className="rounded-full border border-border bg-surface-elevated px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-foreground">
+              {t("SOON")}
+            </span>
+          </div>
+          <h2 className="font-serif-i mt-1 text-3xl sm:text-5xl text-foreground">{t("Real-time AI voice conversation.")}</h2>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            {t("In the future, IGseek will receive a real-time voice communication feature with AI — a dedicated mode focused on live voice conversation, just like a regular phone call.")}
+          </p>
+        </div>
+        <GoToChatButton label={t("Go to chat")} />
+      </div>
+      <motion.div variants={stagger} initial="hidden" animate="show" className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {WAVE_FEATURES.map((f) => (
+          <motion.div
+            key={f.title}
+            variants={item}
+            whileHover={{ y: -4 }}
+            className="rounded-2xl border border-border bg-surface-elevated/40 p-4 text-left transition-colors hover:border-foreground/30"
+          >
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-foreground/10 text-foreground">
+              <f.icon size={18} />
+            </span>
+            <div className="mt-3 text-base font-semibold text-foreground">{t(f.title)}</div>
+            <p className="mt-1 text-sm text-muted-foreground">{t(f.desc)}</p>
+          </motion.div>
+        ))}
+      </motion.div>
       <div className="mt-6 rounded-xl border border-dashed border-border bg-surface-elevated/30 px-4 py-3 text-xs text-muted-foreground">
-        {t("Status: in development — follow updates in the app.")}
+        {t("Status: SOON. This feature is planned for one of the upcoming IGseek updates and is not yet implemented.")}
       </div>
     </PanelShell>
   );
@@ -249,7 +341,7 @@ function ModelsPanel() {
     <PanelShell>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-pixel text-xs uppercase tracking-[0.3em] text-foreground font-semibold">Models</p>
+          <p className="font-pixel text-xs uppercase tracking-[0.3em] text-foreground font-semibold">{t("Models")}</p>
           <h2 className="font-serif-i mt-1 text-3xl sm:text-5xl text-foreground">{t("Three IGseek models + R1.")}</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             {t("Pick by task: speed, conversation or deep reasoning.")}
@@ -388,14 +480,14 @@ function TrailerShowcase() {
               <button
                 onClick={toggleMute}
                 className="grid h-7 w-7 place-items-center rounded-md text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-                aria-label={muted ? "Unmute" : "Mute"}
+                aria-label={muted ? t("Unmute") : t("Mute")}
               >
                 {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
               </button>
               <button
                 onClick={goFullscreen}
                 className="grid h-7 w-7 place-items-center rounded-md text-white/60 transition-colors hover:bg-white/10 hover:text-white"
-                aria-label="Fullscreen"
+                aria-label={t("Fullscreen")}
               >
                 <Maximize2 size={14} />
               </button>
@@ -429,7 +521,7 @@ function TrailerShowcase() {
             <button
               onClick={toggle}
               className="absolute inset-0 grid place-items-center focus:outline-none"
-              aria-label={playing ? "Pause" : "Play"}
+              aria-label={playing ? t("Pause") : t("Play")}
             >
               <motion.span
                 initial={false}
@@ -464,15 +556,93 @@ function TrailerShowcase() {
 
 const PANELS: Record<TabKey, () => React.ReactElement> = {
   engine: EnginePanel,
+  wave: WavePanel,
   models: ModelsPanel,
 };
 
 /* -------------------------- Page -------------------------- */
 function Landing() {
   const t = useT();
+  const lang = useLang();
+  const navigate = useNavigate();
   const [theme, setTheme] = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [langOpen, setLangOpen] = useState(false);
   const [tab, setTab] = useState<TabKey | null>(null);
+  const changeLang = (code: LangCode) => {
+    window.localStorage.setItem("igseek:lang", code);
+    syncDocumentLang(code);
+    window.dispatchEvent(new Event("igseek:lang-change"));
+    setLangOpen(false);
+  };
+  const [checkingSession, setCheckingSession] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(auth.currentUser) || window.localStorage.getItem("igseek:has_logged_in") === "1";
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const goToApp = (persistFlag = true) => {
+      if (persistFlag) {
+        try {
+          window.localStorage.setItem("igseek:has_logged_in", "1");
+        } catch {}
+      }
+      if (!cancelled) {
+        void navigate({ to: "/app", replace: true });
+      }
+    };
+
+    if (auth.currentUser) {
+      goToApp(true);
+      return;
+    }
+
+    try {
+      const rawGuest = window.localStorage.getItem("igseek:guest");
+      if (rawGuest) {
+        const parsed = JSON.parse(rawGuest);
+        if (typeof parsed?.name === "string" && parsed.name.trim()) {
+          goToApp(false);
+          return;
+        }
+      }
+    } catch {}
+
+    void firebaseClient.auth.getSession().then(({ data }) => {
+      if (cancelled) return;
+      if (data.session?.user) {
+        goToApp(true);
+      } else {
+        try {
+          window.localStorage.removeItem("igseek:has_logged_in");
+        } catch {}
+        setCheckingSession(false);
+      }
+    });
+
+    const { data: sub } = firebaseClient.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        goToApp(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
+  }, [navigate]);
+
+  if (checkingSession || (typeof window !== "undefined" && auth.currentUser)) {
+    return (
+      <div className="flex min-h-screen w-full items-center justify-center bg-background text-foreground">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+          <span className="text-xs text-muted-foreground uppercase tracking-widest">IGseek</span>
+        </div>
+      </div>
+    );
+  }
 
   const openTab = (k: TabKey) => {
     setTab(k);
@@ -516,11 +686,16 @@ function Landing() {
                 <button
                   key={n.label}
                   onClick={() => openTab(n.key)}
-                  className={`relative text-sm font-medium tracking-wide transition-colors ${
+                  className={`relative inline-flex items-center gap-1.5 text-sm font-medium tracking-wide transition-colors ${
                     active ? "text-foreground font-semibold" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {n.label}
+                  <span>{n.label}</span>
+                  {n.soon && (
+                    <span className="rounded-full border border-border bg-surface-elevated px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wider text-muted-foreground">
+                      {t("SOON")}
+                    </span>
+                  )}
                   {active && (
                     <motion.span
                       layoutId="nav-underline"
@@ -536,28 +711,97 @@ function Landing() {
             >
               APP
             </Link>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setLangOpen((v) => !v)}
+                onBlur={() => setTimeout(() => setLangOpen(false), 120)}
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+                title={t("Language")}
+                aria-label={t("Change language")}
+              >
+                <span>文A</span>
+                <ChevronDown size={12} />
+              </button>
+              {langOpen && (
+                <div className="absolute right-0 top-full mt-2 w-40 rounded-2xl border border-border bg-surface p-1 shadow-xl z-50">
+                  {LANDING_LANGUAGES.map((l) => (
+                    <button
+                      key={l.code}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        changeLang(l.code);
+                      }}
+                      className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs rounded-xl transition-colors cursor-pointer ${
+                        lang === l.code
+                          ? "bg-foreground/10 font-semibold text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-foreground/5"
+                      }`}
+                    >
+                      <span>{l.native}</span>
+                      {lang === l.code && <Check size={13} />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
               className="p-1 rounded-lg text-muted-foreground transition-colors hover:text-foreground"
-              title={theme === "dark" ? "Переключить на светлую" : "Переключить на тёмную"}
-              aria-label="Toggle theme"
+              title={theme === "dark" ? t("Switch to light") : t("Switch to dark")}
+              aria-label={t("Toggle theme")}
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>
           <div className="flex items-center gap-2 sm:hidden">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setLangOpen((v) => !v)}
+                onBlur={() => setTimeout(() => setLangOpen(false), 120)}
+                className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+                title={t("Language")}
+                aria-label={t("Change language")}
+              >
+                <span>文A</span>
+              </button>
+              {langOpen && (
+                <div className="absolute right-0 top-full mt-2 w-40 rounded-2xl border border-border bg-surface p-1 shadow-xl z-50">
+                  {LANDING_LANGUAGES.map((l) => (
+                    <button
+                      key={l.code}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        changeLang(l.code);
+                      }}
+                      className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs rounded-xl transition-colors cursor-pointer ${
+                        lang === l.code
+                          ? "bg-foreground/10 font-semibold text-foreground"
+                          : "text-muted-foreground hover:text-foreground hover:bg-foreground/5"
+                      }`}
+                    >
+                      <span>{l.native}</span>
+                      {lang === l.code && <Check size={13} />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
               className="p-1 rounded-lg text-muted-foreground transition-colors hover:text-foreground"
-              title={theme === "dark" ? "Переключить на светлую" : "Переключить на тёмную"}
-              aria-label="Toggle theme"
+              title={theme === "dark" ? t("Switch to light") : t("Switch to dark")}
+              aria-label={t("Toggle theme")}
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
             <button
               className="p-1 text-muted-foreground transition-opacity hover:text-foreground"
               onClick={() => setMenuOpen(true)}
-              aria-label="Open menu"
+              aria-label={t("Open menu")}
             >
               <Menu size={20} />
             </button>
@@ -578,11 +822,6 @@ function Landing() {
               transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
               className="flex flex-col items-center"
             >
-              <div className="mb-5 inline-flex items-center gap-2 rounded-xl border border-border bg-surface/80 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm sm:mb-6 sm:px-4 sm:py-2 sm:text-sm shadow-xs">
-                <Logo size={18} />
-                <span>{t("Powered by IGseek")}</span>
-              </div>
-
               <h1 className="font-serif-i max-w-4xl px-2 text-[2.25rem] leading-[1] tracking-tight text-foreground sm:text-5xl md:text-7xl lg:text-8xl">
                 {t("One chat.")}<br />
                 <span>{t("Many")} </span>
@@ -603,17 +842,17 @@ function Landing() {
 
               <div className="mt-6 flex flex-wrap items-stretch justify-center gap-2 text-sm text-foreground sm:gap-3">
                 <div className="flex items-center gap-2 rounded-md border border-border bg-surface/80 px-3 py-2 backdrop-blur-sm sm:px-4 shadow-xs">
-                  <span className="text-sm font-bold tracking-tight sm:text-base">Agents</span>
+                  <span className="text-sm font-bold tracking-tight sm:text-base">{t("Agents")}</span>
                   <span className="text-xs text-muted-foreground">x6</span>
                 </div>
                 <div className="flex items-center gap-2 rounded-md border border-border bg-surface/80 px-3 py-2 backdrop-blur-sm sm:px-4 shadow-xs">
                   <span className="text-lg font-bold sm:text-xl">R.</span>
-                  <span className="text-xs text-muted-foreground">reasoner</span>
+                  <span className="text-xs text-muted-foreground">{t("reasoner")}</span>
                 </div>
                 <div className="flex items-center gap-2 rounded-md border border-border bg-surface/80 px-3 py-2 backdrop-blur-sm sm:px-4 shadow-xs">
                   <Zap size={14} className="text-foreground" />
-                  <span className="text-[10px] font-bold tracking-tight sm:text-xs">Artifacts</span>
-                  <span className="text-xs text-muted-foreground">beta</span>
+                  <span className="text-[10px] font-bold tracking-tight sm:text-xs">{t("Artifacts")}</span>
+                  <span className="text-xs text-muted-foreground">{t("beta")}</span>
                 </div>
               </div>
 
@@ -658,7 +897,7 @@ function Landing() {
             <Logo />
             <span className="text-sm font-semibold tracking-[0.2em] text-foreground">IGSEEK</span>
           </div>
-          <button className="p-2 transition-opacity hover:opacity-70 text-foreground" onClick={() => setMenuOpen(false)} aria-label="Close menu">
+          <button className="p-2 transition-opacity hover:opacity-70 text-foreground" onClick={() => setMenuOpen(false)} aria-label={t("Close menu")}>
             <X size={24} />
           </button>
         </div>
@@ -667,12 +906,17 @@ function Landing() {
             <button
               key={n.label}
               onClick={() => openTab(n.key)}
-              className={`text-2xl tracking-widest text-foreground transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+              className={`inline-flex items-center gap-2.5 text-2xl tracking-widest text-foreground transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
                 menuOpen ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
               }`}
               style={{ transitionDelay: menuOpen ? `${100 + i * 60}ms` : "0ms" }}
             >
-              {n.label}
+              <span>{n.label}</span>
+              {n.soon && (
+                <span className="rounded-full border border-border bg-surface-elevated px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  {t("SOON")}
+                </span>
+              )}
             </button>
           ))}
           <Link

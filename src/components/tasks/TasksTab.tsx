@@ -36,12 +36,17 @@ import {
   deleteLocalTask,
 } from '@/lib/google-tasks';
 
+import { localeFor, useLang, useT } from '@/lib/i18n';
+
 interface TasksTabProps {
   onAskAiAboutTask?: (taskTitle: string, taskNotes?: string) => void;
   onNavigateToChat?: () => void;
 }
 
 export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) {
+  const t = useT();
+  const lang = useLang();
+  const dateLocale = localeFor(lang);
   const [isConnected, setIsConnected] = useState<boolean>(!!getCachedTasksToken());
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -103,7 +108,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
           const lists = await listTaskLists();
           setTaskLists(lists);
         } catch {
-          setTaskLists([{ id: '@default', title: 'Мои задачи' }]);
+          setTaskLists([{ id: '@default', title: t('My tasks') }]);
         }
         // Load tasks from selected list
         const remoteTasks = await listGoogleTasks(selectedListId, true);
@@ -114,7 +119,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
       }
     } catch (err: any) {
       console.error('Failed to load tasks:', err);
-      setError(err?.message || 'Не удалось загрузить задачи');
+      setError(err?.message || t('Failed to load tasks'));
       setTasks(getLocalTasks());
     } finally {
       setLoading(false);
@@ -135,7 +140,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         await loadData();
       }
     } catch (err: any) {
-      setError(err?.message || 'Ошибка подключения к Google Задачам');
+      setError(err?.message || t('Google Tasks connection error'));
     }
   };
 
@@ -163,7 +168,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
       setTasks((prev) =>
         prev.map((t) => (t.id === task.id ? { ...t, status: task.status } : t))
       );
-      setError('Не удалось обновить статус задачи');
+      setError(t('Failed to update task status'));
     }
   };
 
@@ -197,7 +202,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
       setNewDue('');
       setIsAdding(false);
     } catch (err: any) {
-      setError(err?.message || 'Не удалось создать задачу');
+      setError(err?.message || t('Failed to create task'));
     }
   };
 
@@ -225,7 +230,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
       }
       setEditingTask(null);
     } catch (err: any) {
-      setError(err?.message || 'Не удалось сохранить изменения');
+      setError(err?.message || t('Failed to save changes'));
     }
   };
 
@@ -241,7 +246,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
       setTasks((prev) => prev.filter((t) => t.id !== deletingTask.id));
       setDeletingTask(null);
     } catch (err: any) {
-      setError(err?.message || 'Не удалось удалить задачу');
+      setError(err?.message || t('Failed to delete task'));
     }
   };
 
@@ -293,20 +298,20 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold tracking-tight text-foreground">Задачи</h1>
+              <h1 className="text-xl font-bold tracking-tight text-foreground">{t('Tasks')}</h1>
               <span
                 className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border ${
                   isConnected
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
                 }`}
               >
-                <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-                {isConnected ? 'Google Tasks подключен' : 'Локальные задачи'}
+                <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                {isConnected ? t('Google Tasks connected') : t('Local tasks')}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Управляйте списками дел и синхронизируйте задачи с нейросетью IGseek
+              {t('Manage your to-do lists and sync tasks with IGseek AI')}
             </p>
           </div>
         </div>
@@ -318,14 +323,14 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
               className="glass-button-brand group relative flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold text-white w-full sm:w-auto"
             >
               <CheckSquare className="h-4 w-4" />
-              <span>Подключить Google Задачи</span>
+              <span>{t('Connect Google Tasks')}</span>
             </button>
           ) : (
             <button
               onClick={handleDisconnect}
               className="glass-button rounded-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40"
             >
-              Отключить Google
+              {t('Disconnect Google')}
             </button>
           )}
 
@@ -334,7 +339,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
               setRefreshing(true);
               loadData();
             }}
-            title="Обновить"
+            title={t('Refresh')}
             className="glass-button flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground shrink-0"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
@@ -357,7 +362,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         {/* Task lists selector if connected */}
         {isConnected && taskLists.length > 0 && (
           <div className="relative shrink-0">
-            <div className="glass-card flex items-center gap-2 rounded-xl border border-white/10 bg-surface px-3 py-2 text-xs font-medium">
+            <div className="glass-card flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-xs font-medium">
               <ListTodo className="h-4 w-4 text-brand" />
               <select
                 value={selectedListId}
@@ -379,20 +384,20 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Поиск по задачам..."
+            placeholder={t('Search tasks…')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="glass-card w-full rounded-xl border border-white/10 bg-surface pl-9 pr-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-brand/40 transition-colors"
+            className="glass-card w-full rounded-xl border border-border bg-surface pl-9 pr-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-brand/40 transition-colors"
           />
         </div>
 
         {/* Filter Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
           {[
-            { id: 'all', label: `Все (${tasks.length})` },
-            { id: 'active', label: `Активные (${activeCount})` },
-            { id: 'today', label: 'Сегодня' },
-            { id: 'completed', label: `Завершённые (${completedCount})` },
+            { id: 'all', label: `${t('All')} (${tasks.length})` },
+            { id: 'active', label: `${t('Active')} (${activeCount})` },
+            { id: 'today', label: t('Today') },
+            { id: 'completed', label: `${t('Completed')} (${completedCount})` },
           ].map((f) => (
             <button
               key={f.id}
@@ -416,7 +421,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
           className="glass-button flex items-center justify-center gap-2 rounded-2xl border-dashed p-3.5 text-xs font-semibold text-muted-foreground hover:border-brand/50 hover:text-foreground"
         >
           <Plus className="h-4 w-4 text-brand" />
-          <span>Добавить новую задачу</span>
+          <span>{t('Add new task')}</span>
         </button>
       ) : (
         <motion.form
@@ -427,7 +432,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-              <Plus className="h-3.5 w-3.5 text-brand" /> Новая задача
+              <Plus className="h-3.5 w-3.5 text-brand" /> {t('New task')}
             </span>
             <button
               type="button"
@@ -440,30 +445,30 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
 
           <input
             type="text"
-            placeholder="Название задачи..."
+            placeholder={t('Task title…')}
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
             autoFocus
-            className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-brand/50"
+            className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-brand/50"
           />
 
           <textarea
-            placeholder="Заметки или описание (необязательно)..."
+            placeholder={t('Notes or description (optional)…')}
             value={newNotes}
             onChange={(e) => setNewNotes(e.target.value)}
             rows={2}
-            className="glass-card w-full resize-none rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-brand/50"
+            className="glass-card w-full resize-none rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-brand/50"
           />
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <CalendarIcon className="h-3.5 w-3.5 text-brand" />
-              <span>Срок:</span>
+              <span>{t('Due date:')}</span>
               <input
                 type="date"
                 value={newDue}
                 onChange={(e) => setNewDue(e.target.value)}
-                className="glass-card rounded-lg border border-white/10 bg-background/60 px-2 py-1 text-xs text-foreground outline-none"
+                className="glass-card rounded-lg border border-border bg-background/60 px-2 py-1 text-xs text-foreground outline-none"
               />
             </div>
 
@@ -473,14 +478,14 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                 onClick={() => setIsAdding(false)}
                 className="glass-button rounded-xl px-3.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
               >
-                Отмена
+                {t('Cancel')}
               </button>
               <button
                 type="submit"
                 disabled={!newTitle.trim()}
                 className="glass-button-brand rounded-xl px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
               >
-                Создать
+                {t('Create')}
               </button>
             </div>
           </div>
@@ -499,13 +504,13 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand/10 text-brand mb-3">
             <CheckSquare className="h-6 w-6" />
           </div>
-          <h3 className="text-sm font-semibold text-foreground">Задач не найдено</h3>
+          <h3 className="text-sm font-semibold text-foreground">{t('No tasks found')}</h3>
           <p className="text-xs text-muted-foreground mt-1 max-w-xs">
             {searchQuery
-              ? 'Попробуйте изменить поисковый запрос'
+              ? t('Try changing your search query')
               : filter === 'completed'
-              ? 'У вас пока нет выполненных задач'
-              : 'Создайте задачу вручную или попросите нейросеть IGseek в чате!'}
+              ? t('You have no completed tasks yet')
+              : t('Create a task manually or ask IGseek AI in chat!')}
           </p>
         </div>
       ) : (
@@ -528,10 +533,10 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                     <button
                       onClick={() => handleToggleTask(task)}
                       className="mt-0.5 text-muted-foreground hover:text-brand transition-colors shrink-0"
-                      title={isCompleted ? 'Отметить как невыполненную' : 'Отметить как выполненную'}
+                      title={isCompleted ? t('Mark as incomplete') : t('Mark as complete')}
                     >
                       {isCompleted ? (
-                        <CheckSquare className="h-5 w-5 text-emerald-400" />
+                        <CheckSquare className="h-5 w-5 text-emerald-500" />
                       ) : (
                         <Square className="h-5 w-5 hover:text-brand" />
                       )}
@@ -556,7 +561,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                         <div className="flex items-center gap-1.5 mt-2 text-[11px] text-muted-foreground">
                           <CalendarIcon className="h-3 w-3 text-brand" />
                           <span>
-                            Срок: {new Date(task.due).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' })}
+                            {t('Due date:')} {new Date(task.due).toLocaleDateString(dateLocale, { day: 'numeric', month: 'long', year: 'numeric' })}
                           </span>
                         </div>
                       )}
@@ -569,10 +574,10 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                       <button
                         onClick={() => onAskAiAboutTask(task.title, task.notes)}
                         className="glass-button flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-brand hover:border-brand/40"
-                        title="Попросить AI помочь с этой задачей"
+                        title={t('Ask AI for help with this task')}
                       >
                         <Sparkles className="h-3 w-3" />
-                        <span className="hidden md:inline">AI помощь</span>
+                        <span className="hidden md:inline">{t('AI help')}</span>
                       </button>
                     )}
 
@@ -584,7 +589,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                         setEditDue(task.due ? task.due.split('T')[0] : '');
                       }}
                       className="glass-button p-1.5 rounded-lg text-muted-foreground hover:text-foreground"
-                      title="Редактировать"
+                      title={t('Edit')}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
@@ -592,7 +597,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                     <button
                       onClick={() => setDeletingTask(task)}
                       className="glass-button p-1.5 rounded-lg text-muted-foreground hover:border-destructive/40 hover:text-destructive"
-                      title="Удалить"
+                      title={t('Delete')}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -612,11 +617,11 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="glass-card w-full max-w-lg rounded-2xl border border-white/15 bg-surface-elevated/90 p-5 shadow-2xl flex flex-col gap-4 backdrop-blur-2xl"
+              className="glass-card w-full max-w-lg rounded-2xl border border-border bg-surface-elevated/90 p-5 shadow-2xl flex flex-col gap-4 backdrop-blur-2xl"
             >
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center justify-between border-b border-border pb-3">
                 <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Pencil className="h-4 w-4 text-brand" /> Редактировать задачу
+                  <Pencil className="h-4 w-4 text-brand" /> {t('Edit task')}
                 </h3>
                 <button onClick={() => setEditingTask(null)} className="glass-button flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground">
                   <X className="h-4 w-4" />
@@ -626,54 +631,54 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
               <div className="flex flex-col gap-3">
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1 block">
-                    Название
+                    {t('Title')}
                   </label>
                   <input
                     type="text"
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-brand/60"
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-brand/60"
                   />
                 </div>
 
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1 block">
-                    Заметки
+                    {t('Notes')}
                   </label>
                   <textarea
                     value={editNotes}
                     onChange={(e) => setEditNotes(e.target.value)}
                     rows={3}
-                    className="glass-card w-full resize-none rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                    className="glass-card w-full resize-none rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                   />
                 </div>
 
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1 block">
-                    Срок
+                    {t('Due date')}
                   </label>
                   <input
                     type="date"
                     value={editDue}
                     onChange={(e) => setEditDue(e.target.value)}
-                    className="glass-card w-full rounded-xl border border-white/10 bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
+                    className="glass-card w-full rounded-xl border border-border bg-background/60 px-3 py-2 text-xs text-foreground outline-none focus:border-brand/60"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
                 <button
                   onClick={() => setEditingTask(null)}
                   className="glass-button rounded-xl px-4 py-2 text-xs text-muted-foreground hover:text-foreground"
                 >
-                  Отмена
+                  {t('Cancel')}
                 </button>
                 <button
                   onClick={handleSaveEdit}
                   disabled={!editTitle.trim()}
                   className="glass-button-brand rounded-xl px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
                 >
-                  Сохранить
+                  {t('Save')}
                 </button>
               </div>
             </motion.div>
@@ -696,12 +701,12 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                   <Trash2 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">Удалить задачу?</h3>
-                  <p className="text-xs text-muted-foreground">Это действие нельзя будет отменить.</p>
+                  <h3 className="text-sm font-semibold text-foreground">{t('Delete task?')}</h3>
+                  <p className="text-xs text-muted-foreground">{t('This action cannot be undone.')}</p>
                 </div>
               </div>
 
-              <p className="glass-card text-xs text-foreground/90 bg-background/50 p-3 rounded-xl border border-white/10">
+              <p className="glass-card text-xs text-foreground/90 bg-background/50 p-3 rounded-xl border border-border">
                 «<span className="font-medium">{deletingTask.title}</span>»
               </p>
 
@@ -710,13 +715,13 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                   onClick={() => setDeletingTask(null)}
                   className="glass-button rounded-xl px-4 py-2 text-xs text-muted-foreground hover:text-foreground"
                 >
-                  Отмена
+                  {t('Cancel')}
                 </button>
                 <button
                   onClick={handleConfirmDelete}
                   className="glass-button-brand rounded-xl !bg-rose-600 px-4 py-2 text-xs font-semibold text-white"
                 >
-                  Удалить
+                  {t('Delete')}
                 </button>
               </div>
             </motion.div>

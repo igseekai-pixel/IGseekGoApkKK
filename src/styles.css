@@ -130,8 +130,8 @@
   --ring: var(--brand);
 
   --gradient-brand: linear-gradient(135deg, var(--brand), var(--brand));
-  --gradient-radial-glow: radial-gradient(ellipse at top, oklch(0.35 0.18 27 / 0.4), transparent 60%);
-  --shadow-glow: 0 0 60px -10px oklch(0.55 0.22 27 / 0.4);
+  --gradient-radial-glow: radial-gradient(ellipse at top, var(--brand-soft), transparent 60%);
+  --shadow-glow: 0 0 60px -10px var(--brand-glow-shadow);
   --shadow-elegant: 0 20px 60px -20px oklch(0 0 0 / 0.6);
 }
 
@@ -171,16 +171,23 @@
 
 /* ==============================================================
    LOGO STYLING ACROSS THEMES:
-   - Dark theme: follows selected accent color via --logo-filter
+   - Dark theme: exact accent color via --brand mask fill
    - Light theme: pure crisp black silhouette
    ============================================================== */
 .logo-mark {
-  filter: var(--logo-filter, none);
-  transition: filter 0.25s ease, opacity 0.2s ease;
+  display: inline-block;
+  background-color: var(--brand, #ef4444);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  transition: background-color 0.25s ease, opacity 0.2s ease;
 }
 
 .light .logo-mark {
-  filter: brightness(0) !important;
+  background-color: #09090b !important;
 }
 
 .light .hero-logo-glow {
@@ -506,3 +513,15 @@
   border-radius: 0.75rem;
   border: 1px solid var(--color-border);
 }
+
+/* Hide scrollbar for clean horizontal tracks */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
