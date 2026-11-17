@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { makeT, localeFor, readStoredLang, syncDocumentLang, useLang, type LangCode as I18nLang } from "@/lib/i18n";
@@ -4090,12 +4090,22 @@ const MessageBubble = memo(function MessageBubble({
   const [isEditing, setIsEditing] = useState(false);
   const [longTextOpen, setLongTextOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuPlace, setMenuPlace] = useState<"above" | "below" | "floating">("above");
+  const [menuPos, setMenuPos] = useState<{
+    mode: "above" | "below" | "floating";
+    anchorTop: number;
+    anchorLeft: number;
+    anchorRight: number;
+  }>({ mode: "above", anchorTop: 0, anchorLeft: 12, anchorRight: 12 });
   const [isHolding, setIsHolding] = useState(false);
   const bubbleWrapRef = useRef<HTMLDivElement>(null);
+  const menuPortalRef = useRef<HTMLDivElement>(null);
   const holdTimerRef = useRef<number | null>(null);
+  const armTimerRef = useRef<number | null>(null);
   const holdOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressClickRef = useRef(false);
+  const pointerDownActiveRef = useRef(false);
+  const backdropArmedRef = useRef(false);
+  const suppressContextMenuUntilRef = useRef(0);
   const onEditRef = useRef(onEdit);
   const onUpdateTextRef = useRef(onUpdateText);
   const onDeleteRef = useRef(onDelete);
@@ -4123,16 +4133,59 @@ const MessageBubble = memo(function MessageBubble({
     setIsHolding(false);
   };
 
+  const scheduleBackdropArm = (delayMs: number) => {
+    if (armTimerRef.current !== null) {
+      window.clearTimeout(armTimerRef.current);
+      armTimerRef.current = null;
+    }
+    backdropArmedRef.current = false;
+    armTimerRef.current = window.setTimeout(() => {
+      armTimerRef.current = null;
+      backdropArmedRef.current = true;
+    }, delayMs);
+  };
+
   useEffect(() => {
     return () => {
-      if (holdTimerRef.current !== null) {
-        window.clearTimeout(holdTimerRef.current);
-      }
+      if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current);
+      if (armTimerRef.current !== null) window.clearTimeout(armTimerRef.current);
     };
   }, []);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    const onGlobalRelease = () => {
+      if (holdTimerRef.current !== null) {
+        clearHoldTimer();
+      }
+      if (pointerDownActiveRef.current) {
+        pointerDownActiveRef.current = false;
+        if (menuOpen) {
+          scheduleBackdropArm(240);
+        }
+      }
+    };
+    window.addEventListener("pointerup", onGlobalRelease, true);
+    window.addEventListener("pointercancel", onGlobalRelease, true);
+    window.addEventListener("touchend", onGlobalRelease, true);
+    return () => {
+      window.removeEventListener("pointerup", onGlobalRelease, true);
+      window.removeEventListener("pointercancel", onGlobalRelease, true);
+      window.removeEventListener("touchend", onGlobalRelease, true);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      backdropArmedRef.current = false;
+      if (armTimerRef.current !== null) {
+        window.clearTimeout(armTimerRef.current);
+        armTimerRef.current = null;
+      }
+      return;
+    }
+    if (menuOpen && !pointerDownActiveRef.current && !backdropArmedRef.current && armTimerRef.current === null) {
+      scheduleBackdropArm(200);
+    }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") setMenuOpen(false);
     };
@@ -4140,20 +4193,46 @@ const MessageBubble = memo(function MessageBubble({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [menuOpen]);
 
-  const openActionMenu = () => {
+  useLayoutEffect(() => {
+    if (!menuOpen || menuPos.mode === "floating") return;
+    const el = menuPortalRef.current;
+    if (!el || typeof window === "undefined") return;
+    const vw = window.innerWidth;
+    const width = el.offsetWidth || 220;
+    const topPx =
+      menuPos.mode === "above"
+        ? Math.max(64, Math.min(window.innerHeight - 16, menuPos.anchorTop))
+        : Math.max(12, Math.min(window.innerHeight - 64, menuPos.anchorTop));
+    let leftPx = isUser ? menuPos.anchorRight - width : menuPos.anchorLeft;
+    leftPx = Math.max(12, Math.min(vw - width - 12, leftPx));
+    el.style.top = `${topPx}px`;
+    el.style.left = `${leftPx}px`;
+  }, [menuOpen, menuPos, isUser]);
+
+  const openActionMenu = (fromLongPress = false) => {
     if (isEditing) return;
     if (!isUser && isStreamingLast && !message.content) return;
     const rect = bubbleWrapRef.current?.getBoundingClientRect();
     if (!rect || typeof window === "undefined") {
-      setMenuPlace("floating");
+      setMenuPos({ mode: "floating", anchorTop: 0, anchorLeft: 12, anchorRight: 12 });
     } else if (rect.height > window.innerHeight * 0.58) {
-      setMenuPlace("floating");
-    } else if (rect.top >= 96) {
-      setMenuPlace("above");
-    } else if (window.innerHeight - rect.bottom >= 96) {
-      setMenuPlace("below");
+      setMenuPos({ mode: "floating", anchorTop: 0, anchorLeft: rect.left, anchorRight: rect.right });
+    } else if (rect.top >= 88) {
+      setMenuPos({
+        mode: "above",
+        anchorTop: rect.top - 8,
+        anchorLeft: rect.left,
+        anchorRight: rect.right,
+      });
+    } else if (window.innerHeight - rect.bottom >= 88) {
+      setMenuPos({
+        mode: "below",
+        anchorTop: rect.bottom + 8,
+        anchorLeft: rect.left,
+        anchorRight: rect.right,
+      });
     } else {
-      setMenuPlace("floating");
+      setMenuPos({ mode: "floating", anchorTop: 0, anchorLeft: rect.left, anchorRight: rect.right });
     }
     try {
       window.getSelection()?.removeAllRanges();
@@ -4165,6 +4244,11 @@ const MessageBubble = memo(function MessageBubble({
     } catch {
       /* ignore */
     }
+    if (fromLongPress && pointerDownActiveRef.current) {
+      backdropArmedRef.current = false;
+    } else {
+      scheduleBackdropArm(180);
+    }
     setMenuOpen(true);
   };
 
@@ -4175,6 +4259,7 @@ const MessageBubble = memo(function MessageBubble({
     if (target?.closest("button, a, input, textarea, [data-no-longpress]")) return;
 
     clearHoldTimer();
+    pointerDownActiveRef.current = true;
     holdOriginRef.current = { x: e.clientX, y: e.clientY };
     setIsHolding(true);
     holdTimerRef.current = window.setTimeout(() => {
@@ -4182,10 +4267,11 @@ const MessageBubble = memo(function MessageBubble({
       holdOriginRef.current = null;
       setIsHolding(false);
       suppressClickRef.current = true;
+      suppressContextMenuUntilRef.current = Date.now() + 900;
       window.setTimeout(() => {
         suppressClickRef.current = false;
-      }, 350);
-      openActionMenu();
+      }, 450);
+      openActionMenu(true);
     }, 420);
   };
 
@@ -4193,7 +4279,7 @@ const MessageBubble = memo(function MessageBubble({
     if (!holdOriginRef.current) return;
     const dx = e.clientX - holdOriginRef.current.x;
     const dy = e.clientY - holdOriginRef.current.y;
-    if (Math.hypot(dx, dy) > 8) {
+    if (Math.hypot(dx, dy) > 14) {
       clearHoldTimer();
     }
   };
@@ -4203,8 +4289,10 @@ const MessageBubble = memo(function MessageBubble({
     const target = e.target as HTMLElement | null;
     if (target?.closest("button, a, input, textarea, [data-no-longpress]")) return;
     e.preventDefault();
+    e.stopPropagation();
+    if (menuOpen || Date.now() < suppressContextMenuUntilRef.current) return;
     clearHoldTimer();
-    openActionMenu();
+    openActionMenu(false);
   };
 
   const handleCopyAction = async () => {
@@ -4228,13 +4316,13 @@ const MessageBubble = memo(function MessageBubble({
 
   const menuBarNode = (
     <motion.div
-      initial={{ opacity: 0, scale: 0.94, y: menuPlace === "below" ? -6 : 6 }}
+      initial={{ opacity: 0, scale: 0.94, y: menuPos.mode === "below" ? -6 : 6 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.94, y: menuPlace === "below" ? -6 : 6 }}
+      exit={{ opacity: 0, scale: 0.94, y: menuPos.mode === "below" ? -6 : 6 }}
       transition={{ duration: 0.14 }}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
-      className="flex items-center gap-1 rounded-2xl border border-zinc-200 dark:border-white/15 bg-white/95 dark:bg-[#18181c]/95 p-1.5 shadow-2xl backdrop-blur-xl"
+      className="flex items-center gap-1 rounded-2xl border border-zinc-200 dark:border-white/15 bg-white/95 dark:bg-[#18181c]/95 p-1.5 shadow-2xl backdrop-blur-xl select-none"
     >
       {isUser && onEdit && (
         <button
@@ -4306,21 +4394,36 @@ const MessageBubble = memo(function MessageBubble({
         createPortal(
           <div
             className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[1px]"
-            onClick={() => setMenuOpen(false)}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (backdropArmedRef.current) setMenuOpen(false);
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (backdropArmedRef.current) setMenuOpen(false);
+            }}
             onContextMenu={(e) => {
               e.preventDefault();
-              setMenuOpen(false);
+              e.stopPropagation();
             }}
           />,
           document.body,
         )}
       {menuOpen &&
-        menuPlace === "floating" &&
         typeof document !== "undefined" &&
         createPortal(
-          <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-3">
-            <AnimatePresence>{menuBarNode}</AnimatePresence>
-          </div>,
+          menuPos.mode === "floating" ? (
+            <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-3">
+              <AnimatePresence>{menuBarNode}</AnimatePresence>
+            </div>
+          ) : (
+            <div
+              ref={menuPortalRef}
+              className={`fixed z-50 ${menuPos.mode === "above" ? "-translate-y-full" : ""}`}
+            >
+              <AnimatePresence>{menuBarNode}</AnimatePresence>
+            </div>
+          ),
           document.body,
         )}
 
@@ -4330,7 +4433,6 @@ const MessageBubble = memo(function MessageBubble({
         onPointerMove={handlePointerMove}
         onPointerUp={clearHoldTimer}
         onPointerCancel={clearHoldTimer}
-        onPointerLeave={clearHoldTimer}
         onContextMenu={handleContextMenu}
         onClickCapture={(e) => {
           if (suppressClickRef.current) {
@@ -4339,20 +4441,11 @@ const MessageBubble = memo(function MessageBubble({
           }
         }}
         className={`relative ${isEditing ? "w-full" : "w-fit"} max-w-[88%] sm:max-w-[85%] min-w-0 transition-transform duration-150 ${
+          isHolding || menuOpen ? "select-none" : ""
+        } ${
           menuOpen ? "z-50 scale-[0.99]" : isHolding ? "scale-[0.985]" : ""
         }`}
       >
-        <AnimatePresence>
-          {menuOpen && menuPlace !== "floating" && (
-            <div
-              className={`absolute z-50 ${
-                menuPlace === "above" ? "bottom-full mb-2" : "top-full mt-2"
-              } ${isUser ? "right-0" : "left-0"}`}
-            >
-              {menuBarNode}
-            </div>
-          )}
-        </AnimatePresence>
 
         {isUser ? (
           <div className="flex flex-col items-end gap-1 min-w-0 w-full">

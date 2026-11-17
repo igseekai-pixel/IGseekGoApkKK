@@ -130,6 +130,7 @@ async function pipeWebResponse(webRes: Response, res: express.Response) {
 }
 
 let viteDevServer: any = null;
+const isBundledServer = path.extname(__filename) !== '.ts';
 
 // Route handlers for backend API
 app.post('/api/chat', async (req, res) => {
@@ -141,7 +142,7 @@ app.post('/api/chat', async (req, res) => {
       const mod = await viteDevServer.ssrLoadModule('/src/routes/api/chat.ts');
       handleChatPost = mod.handleChatPost;
     } else {
-      const mod = await import('./src/routes/api/chat.js').catch(() => import('./src/routes/api/chat.ts'));
+      const mod = await import('./src/routes/api/chat.ts');
       handleChatPost = mod.handleChatPost;
     }
 
@@ -164,7 +165,7 @@ app.all('/api/memory', async (req, res) => {
       const mod = await viteDevServer.ssrLoadModule('/src/routes/api/memory.ts');
       handleMemoryRequest = mod.handleMemoryRequest;
     } else {
-      const mod = await import('./src/routes/api/memory.js').catch(() => import('./src/routes/api/memory.ts'));
+      const mod = await import('./src/routes/api/memory.ts');
       handleMemoryRequest = mod.handleMemoryRequest;
     }
 
@@ -187,7 +188,7 @@ app.all('/api/flow', async (req, res) => {
       const mod = await viteDevServer.ssrLoadModule('/src/routes/api/flow.ts');
       handleFlowRequest = mod.handleFlowRequest;
     } else {
-      const mod = await import('./src/routes/api/flow.js').catch(() => import('./src/routes/api/flow.ts'));
+      const mod = await import('./src/routes/api/flow.ts');
       handleFlowRequest = mod.handleFlowRequest;
     }
 
@@ -210,7 +211,7 @@ app.all(['/api/auth/github', '/api/auth/github/*'], async (req, res) => {
       const mod = await viteDevServer.ssrLoadModule('/src/routes/api/auth-github.ts');
       handleGitHubAuth = mod.handleGitHubAuth;
     } else {
-      const mod = await import('./src/routes/api/auth-github.js').catch(() => import('./src/routes/api/auth-github.ts'));
+      const mod = await import('./src/routes/api/auth-github.ts');
       handleGitHubAuth = mod.handleGitHubAuth;
     }
 
@@ -225,7 +226,7 @@ app.all(['/api/auth/github', '/api/auth/github/*'], async (req, res) => {
 });
 
 async function startServer() {
-  if (!isProduction) {
+  if (!isProduction && !isBundledServer) {
     const { createServer } = await import('vite');
     viteDevServer = await createServer({
       server: {
@@ -246,7 +247,7 @@ async function startServer() {
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${port} (${isProduction ? 'production' : 'development'})`);
+    console.log(`Server running on http://0.0.0.0:${port} (${isProduction || isBundledServer ? 'production' : 'development'})`);
   });
 }
 

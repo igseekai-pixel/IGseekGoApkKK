@@ -13,11 +13,6 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
-import { Route as ApiChatRouteImport } from './routes/api/chat'
-import { Route as ApiCreateDonationRouteImport } from './routes/api/create-donation'
-import { Route as ApiCreatePaymentRouteImport } from './routes/api/create-payment'
-import { Route as ApiMemoryRouteImport } from './routes/api/memory'
-import { Route as ApiPublicPlategaCallbackRouteImport } from './routes/api/public/platega-callback'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -39,54 +34,18 @@ const ResetPasswordRoute = ResetPasswordRouteImport.update({
   path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiChatRoute = ApiChatRouteImport.update({
-  id: '/api/chat',
-  path: '/api/chat',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiCreateDonationRoute = ApiCreateDonationRouteImport.update({
-  id: '/api/create-donation',
-  path: '/api/create-donation',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiCreatePaymentRoute = ApiCreatePaymentRouteImport.update({
-  id: '/api/create-payment',
-  path: '/api/create-payment',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiMemoryRoute = ApiMemoryRouteImport.update({
-  id: '/api/memory',
-  path: '/api/memory',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicPlategaCallbackRoute =
-  ApiPublicPlategaCallbackRouteImport.update({
-    id: '/api/public/platega-callback',
-    path: '/api/public/platega-callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/app': typeof AppRoute
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
-  '/api/chat': typeof ApiChatRoute
-  '/api/create-donation': typeof ApiCreateDonationRoute
-  '/api/create-payment': typeof ApiCreatePaymentRoute
-  '/api/memory': typeof ApiMemoryRoute
-  '/api/public/platega-callback': typeof ApiPublicPlategaCallbackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/app': typeof AppRoute
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
-  '/api/chat': typeof ApiChatRoute
-  '/api/create-donation': typeof ApiCreateDonationRoute
-  '/api/create-payment': typeof ApiCreatePaymentRoute
-  '/api/memory': typeof ApiMemoryRoute
-  '/api/public/platega-callback': typeof ApiPublicPlategaCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -94,46 +53,13 @@ export interface FileRoutesById {
   '/app': typeof AppRoute
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
-  '/api/chat': typeof ApiChatRoute
-  '/api/create-donation': typeof ApiCreateDonationRoute
-  '/api/create-payment': typeof ApiCreatePaymentRoute
-  '/api/memory': typeof ApiMemoryRoute
-  '/api/public/platega-callback': typeof ApiPublicPlategaCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/app'
-    | '/login'
-    | '/reset-password'
-    | '/api/chat'
-    | '/api/create-donation'
-    | '/api/create-payment'
-    | '/api/memory'
-    | '/api/public/platega-callback'
+  fullPaths: '/' | '/app' | '/login' | '/reset-password'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/app'
-    | '/login'
-    | '/reset-password'
-    | '/api/chat'
-    | '/api/create-donation'
-    | '/api/create-payment'
-    | '/api/memory'
-    | '/api/public/platega-callback'
-  id:
-    | '__root__'
-    | '/'
-    | '/app'
-    | '/login'
-    | '/reset-password'
-    | '/api/chat'
-    | '/api/create-donation'
-    | '/api/create-payment'
-    | '/api/memory'
-    | '/api/public/platega-callback'
+  to: '/' | '/app' | '/login' | '/reset-password'
+  id: '__root__' | '/' | '/app' | '/login' | '/reset-password'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -141,11 +67,6 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRoute
   LoginRoute: typeof LoginRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
-  ApiChatRoute: typeof ApiChatRoute
-  ApiCreateDonationRoute: typeof ApiCreateDonationRoute
-  ApiCreatePaymentRoute: typeof ApiCreatePaymentRoute
-  ApiMemoryRoute: typeof ApiMemoryRoute
-  ApiPublicPlategaCallbackRoute: typeof ApiPublicPlategaCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -182,35 +103,35 @@ declare module '@tanstack/react-router' {
       id: '/api/chat'
       path: '/api/chat'
       fullPath: '/api/chat'
-      preLoaderRoute: typeof ApiChatRouteImport
+      preLoaderRoute: unknown
       parentRoute: typeof rootRouteImport
     }
     '/api/create-donation': {
       id: '/api/create-donation'
       path: '/api/create-donation'
       fullPath: '/api/create-donation'
-      preLoaderRoute: typeof ApiCreateDonationRouteImport
+      preLoaderRoute: unknown
       parentRoute: typeof rootRouteImport
     }
     '/api/create-payment': {
       id: '/api/create-payment'
       path: '/api/create-payment'
       fullPath: '/api/create-payment'
-      preLoaderRoute: typeof ApiCreatePaymentRouteImport
+      preLoaderRoute: unknown
       parentRoute: typeof rootRouteImport
     }
     '/api/memory': {
       id: '/api/memory'
       path: '/api/memory'
       fullPath: '/api/memory'
-      preLoaderRoute: typeof ApiMemoryRouteImport
+      preLoaderRoute: unknown
       parentRoute: typeof rootRouteImport
     }
     '/api/public/platega-callback': {
       id: '/api/public/platega-callback'
       path: '/api/public/platega-callback'
       fullPath: '/api/public/platega-callback'
-      preLoaderRoute: typeof ApiPublicPlategaCallbackRouteImport
+      preLoaderRoute: unknown
       parentRoute: typeof rootRouteImport
     }
   }
@@ -221,22 +142,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRoute,
   LoginRoute: LoginRoute,
   ResetPasswordRoute: ResetPasswordRoute,
-  ApiChatRoute: ApiChatRoute,
-  ApiCreateDonationRoute: ApiCreateDonationRoute,
-  ApiCreatePaymentRoute: ApiCreatePaymentRoute,
-  ApiMemoryRoute: ApiMemoryRoute,
-  ApiPublicPlategaCallbackRoute: ApiPublicPlategaCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
