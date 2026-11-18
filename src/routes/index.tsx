@@ -592,9 +592,6 @@ function Landing() {
       if (data.session?.user) {
         goToApp(true);
       } else {
-        try {
-          window.localStorage.removeItem("igseek:has_logged_in");
-        } catch {}
         setCheckingSession(false);
       }
     });

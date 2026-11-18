@@ -3,6 +3,7 @@ import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, u
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { makeT, localeFor, readStoredLang, syncDocumentLang, useLang, type LangCode as I18nLang } from "@/lib/i18n";
+import { useAutoResizeTextarea } from "@/hooks/useAutoResizeTextarea";
 
 import { firebaseClient as supabase, isEmbeddedWebView, waitForAuthProfileSetup } from "@/lib/firebase-service";
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
@@ -912,13 +913,11 @@ function Index() {
 
 
 
-  // Auto-grow the bottom composer textarea
-  useEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [input, tab]);
+  // Auto-grow the bottom composer textarea smoothly to fit written text
+  const syncComposerHeight = useAutoResizeTextarea(composerRef, input, {
+    maxViewportFraction: 0.55,
+    deps: [tab, messages.length > 0],
+  });
 
   useEffect(() => {
     if (!hydrated) return;
@@ -2521,7 +2520,7 @@ function Index() {
                   if (isSending) return;
                   sendChat(input);
                 }}
-                className="relative flex items-center gap-1 sm:gap-1.5 rounded-full border border-zinc-200 dark:border-white/10 bg-white/95 dark:bg-[#141416]/95 p-1 pl-2 sm:p-1.5 sm:pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-all w-full overflow-hidden"
+                className="relative flex items-end gap-1 sm:gap-1.5 rounded-[26px] border border-zinc-200 dark:border-white/10 bg-white/95 dark:bg-[#141416]/95 p-1 pl-2 sm:p-1.5 sm:pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-colors w-full"
               >
 
                 {/* Paperclip */}
@@ -2543,6 +2542,7 @@ function Index() {
                   ref={composerRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onInput={syncComposerHeight}
                   onFocus={(e) => {
                     if (!isAuthed) { e.target.blur(); setAuthOpen(true); }
                     else if (isLocked) { e.target.blur(); setProfileOpen(true); }
@@ -2562,7 +2562,7 @@ function Index() {
                       ? t("Sign in to start chatting with IGseek…")
                       : t("Ask IGseek anything…")
                   }
-                  className="max-h-32 min-h-[32px] flex-1 min-w-0 resize-none bg-transparent px-1.5 py-1 text-[13.5px] sm:text-[15px] leading-5 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
+                  className="min-h-[32px] sm:min-h-[36px] flex-1 min-w-0 resize-none overflow-hidden bg-transparent px-1.5 py-1.5 sm:py-2 text-[13.5px] sm:text-[15px] leading-5 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
                 />
 
                 {/* Mic circular button */}
@@ -2877,6 +2877,11 @@ function ChatView({
 }) {
   const t = useT();
   const [heroLongTextOpen, setHeroLongTextOpen] = useState(false);
+  const heroComposerRef = useRef<HTMLTextAreaElement | null>(null);
+  const syncHeroComposerHeight = useAutoResizeTextarea(heroComposerRef, input, {
+    maxViewportFraction: null,
+    deps: [messages.length === 0],
+  });
   const [welcomeChips, setWelcomeChips] = useState<
     Array<{
       icon: any;
@@ -3063,7 +3068,7 @@ function ChatView({
           )}
           <form
             onSubmit={(e) => { e.preventDefault(); submit(input); }}
-            className="flex w-full items-center gap-2 rounded-full border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-all"
+            className="flex w-full items-end gap-2 rounded-[28px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-colors"
           >
             <button
               type="button"
@@ -3074,8 +3079,10 @@ function ChatView({
               <Paperclip className="h-4 w-4" />
             </button>
             <textarea
+              ref={heroComposerRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onInput={syncHeroComposerHeight}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -3089,7 +3096,7 @@ function ChatView({
               rows={1}
               readOnly={!isAuthed || isLocked}
               placeholder={t("Ask IGseek anything…")}
-              className="flex-1 max-h-28 resize-none bg-transparent px-2 py-1.5 text-[15px] text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none min-w-0"
+              className="flex-1 min-h-[36px] min-w-0 resize-none overflow-hidden bg-transparent px-2 py-1.5 text-[15px] leading-6 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none text-left"
             />
             <div className="flex items-center gap-1.5 shrink-0">
               {isSending && onStop && (
@@ -4129,6 +4136,11 @@ const MessageBubble = memo(function MessageBubble({
   const isUser = message.role === "user";
   const displayTextForCount = isUser ? stripAttachmentsForLineCount(message.content) : message.content;
   const [draft, setDraft] = useState(displayTextForCount);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const syncEditHeight = useAutoResizeTextarea(editTextareaRef, draft, {
+    maxViewportFraction: null,
+    deps: [isEditing],
+  });
   const showLongTextBtn = !isStreamingLast && isLongTextOverLimit(displayTextForCount);
 
   const copyableText = isUser
@@ -4466,15 +4478,17 @@ const MessageBubble = memo(function MessageBubble({
             {isEditing ? (
               <div className="w-full min-w-0 max-w-full rounded-2xl border border-brand/40 bg-brand/10 p-2">
                 <textarea
+                  ref={editTextareaRef}
                   autoFocus
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
+                  onInput={syncEditHeight}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitEdit(); }
                     if (e.key === "Escape") { setIsEditing(false); setDraft(displayTextForCount); }
                   }}
-                  rows={Math.min(6, Math.max(2, draft.split("\n").length))}
-                  className="w-full resize-none bg-transparent px-2 py-1 text-[14px] md:text-[15px] leading-relaxed outline-none"
+                  rows={2}
+                  className="w-full min-h-[56px] resize-none overflow-hidden bg-transparent px-2 py-1 text-[14px] md:text-[15px] leading-relaxed outline-none"
                 />
                 <div className="mt-1 flex items-center justify-end gap-1.5">
                   <button
@@ -6130,6 +6144,16 @@ function EngineView({
   const [engineTab, setEngineTab] = useState<"chat" | "preview" | "files">("chat");
   const [activeFile, setActiveFile] = useState("src/App.tsx");
   const [prompt, setPrompt] = useState("");
+  const engineStartComposerRef = useRef<HTMLTextAreaElement | null>(null);
+  const engineActiveComposerRef = useRef<HTMLTextAreaElement | null>(null);
+  const syncEngineStartHeight = useAutoResizeTextarea(engineStartComposerRef, prompt, {
+    maxViewportFraction: null,
+    deps: [!hasStarted],
+  });
+  const syncEngineActiveHeight = useAutoResizeTextarea(engineActiveComposerRef, prompt, {
+    maxViewportFraction: 0.5,
+    deps: [hasStarted, engineTab],
+  });
   const [isGenerating, setIsGenerating] = useState(false);
   const [isZipping, setIsZipping] = useState(false);
   const [reasoning, setReasoning] = useState(false);
@@ -6902,7 +6926,7 @@ Engine Studio automatically parses these blocks and writes files directly into t
 
       {/* ================= VIEW 1: WELCOMING START SCREEN (BEFORE CREATION STARTS) ================= */}
       {!hasStarted ? (
-        <div className="space-y-6 max-w-4xl mx-auto px-2 pt-4">
+        <div className="space-y-6 max-w-4xl mx-auto px-2 pt-4 pb-8 max-h-[calc(100vh-100px)] md:max-h-[calc(100vh-110px)] overflow-y-auto">
           {/* Header */}
           <div className="flex flex-col items-center text-center max-w-xl mx-auto space-y-2">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-black/10 dark:border-white/10 bg-zinc-100 dark:bg-white/5 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-800 dark:text-zinc-200">
@@ -6927,11 +6951,13 @@ Engine Studio automatically parses these blocks and writes files directly into t
                 e.preventDefault();
                 void generateWithAI();
               }}
-              className="relative flex flex-col gap-3 rounded-[24px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-4 shadow-xl backdrop-blur-xl transition-all focus-within:border-zinc-400 dark:focus-within:border-white/20"
+              className="relative flex flex-col gap-3 rounded-[24px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-4 shadow-xl backdrop-blur-xl transition-colors focus-within:border-zinc-400 dark:focus-within:border-white/20"
             >
               <textarea
+                ref={engineStartComposerRef}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
+                onInput={syncEngineStartHeight}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -6940,7 +6966,7 @@ Engine Studio automatically parses these blocks and writes files directly into t
                 }}
                 rows={2}
                 placeholder={t("Build something with IGseek…")}
-                className="w-full resize-none bg-transparent px-1 py-1 text-[15px] text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
+                className="w-full min-h-[54px] resize-none overflow-hidden bg-transparent px-1 py-1 text-[15px] leading-relaxed text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
               />
 
               {isLongTextOverLimit(prompt) && (
@@ -7274,11 +7300,13 @@ Engine Studio automatically parses these blocks and writes files directly into t
                   e.preventDefault();
                   void generateWithAI();
                 }}
-                className="shrink-0 relative flex items-center gap-2 rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 shadow-lg backdrop-blur-xl"
+                className="shrink-0 relative flex items-end gap-2 rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 shadow-lg backdrop-blur-xl"
               >
                 <textarea
+                  ref={engineActiveComposerRef}
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
+                  onInput={syncEngineActiveHeight}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -7287,10 +7315,10 @@ Engine Studio automatically parses these blocks and writes files directly into t
                   }}
                   rows={1}
                   placeholder={t("Describe project changes or improvements…")}
-                  className="flex-1 max-h-28 resize-none bg-transparent px-3 py-1.5 text-sm text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none"
+                  className="flex-1 min-h-[32px] min-w-0 resize-none overflow-hidden bg-transparent px-3 py-1.5 text-sm leading-5 text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none"
                 />
                 <span
-                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold shrink-0 ${
+                  className={`mb-1.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold shrink-0 ${
                     engineExhausted
                       ? "border-red-500/40 bg-red-500/10 text-red-500"
                       : "border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-muted-foreground"
@@ -8644,6 +8672,10 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
   const [editing, setEditing] = useState<{ id: string; content: string } | null>(null);
   const [query, setQuery] = useState("");
   const memFileInputRef = useRef<HTMLInputElement | null>(null);
+  const memDraftRef = useRef<HTMLTextAreaElement | null>(null);
+  const syncMemDraftHeight = useAutoResizeTextarea(memDraftRef, draft, {
+    maxViewportFraction: 0.35,
+  });
 
   const authHeader = async () => {
     const { data } = await supabase.auth.getSession();
@@ -8949,7 +8981,7 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
               onChange={handleMemFileChange}
               className="hidden"
             />
-            <div className="flex items-center gap-2">
+            <div className="flex items-end gap-2">
               <button
                 type="button"
                 onClick={() => memFileInputRef.current?.click()}
@@ -8959,11 +8991,13 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                 <Paperclip className="h-4 w-4" />
               </button>
               <textarea
+                ref={memDraftRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
+                onInput={syncMemDraftHeight}
                 rows={1}
                 placeholder={t("Add a memory or text…")}
-                className="glass-card flex-1 resize-none rounded-lg border border-white/10 bg-surface-elevated/60 px-3 py-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:border-brand/50"
+                className="glass-card flex-1 min-h-[36px] min-w-0 resize-none overflow-hidden rounded-lg border border-white/10 bg-surface-elevated/60 px-3 py-2 text-xs leading-5 placeholder:text-muted-foreground focus:outline-none focus:border-brand/50"
               />
               <button
                 onClick={addMemory}

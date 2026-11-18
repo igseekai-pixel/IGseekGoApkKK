@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useAutoResizeTextarea } from "@/hooks/useAutoResizeTextarea";
 import {
   Play,
   Pause,
@@ -284,6 +285,11 @@ export function FlowView({
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [goalInput, setGoalInput] = useState("");
+  const goalComposerRef = useRef<HTMLTextAreaElement | null>(null);
+  const syncGoalComposerHeight = useAutoResizeTextarea(goalComposerRef, goalInput, {
+    maxViewportFraction: null,
+    deps: [Boolean(selectedTaskId)],
+  });
   const [autonomy, setAutonomy] = useState<FlowAutonomyLevel>("semi-auto");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -1644,8 +1650,10 @@ export function FlowView({
                 </div>
 
                 <textarea
+                  ref={goalComposerRef}
                   value={goalInput}
                   onChange={(e) => setGoalInput(e.target.value)}
+                  onInput={syncGoalComposerHeight}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
                       e.preventDefault();
@@ -1654,7 +1662,7 @@ export function FlowView({
                   }}
                   rows={3}
                   placeholder={t("Set a goal for Flow (e.g. Find 5 competitors, study their sites, compare features, and build a table in Library)…")}
-                  className="w-full resize-none bg-transparent px-2 py-1 text-[15px] text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none leading-relaxed"
+                  className="w-full min-h-[78px] resize-none overflow-hidden bg-transparent px-2 py-1 text-[15px] text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none leading-relaxed"
                 />
                 {flowExhausted && cooldownResetAt > 0 && (
                   <div className="mx-1">

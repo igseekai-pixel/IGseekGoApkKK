@@ -40,9 +40,6 @@ const app = initializeApp(firebaseConfig);
 /* CRITICAL: The app will break without specifying firestoreDatabaseId */
 export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId || "(default)");
 export const auth = getAuth(app);
-if (typeof window !== 'undefined') {
-  setPersistence(auth, browserLocalPersistence).catch(() => {});
-}
 export const googleProvider = new GoogleAuthProvider();
 
 export enum OperationType {

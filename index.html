@@ -17,6 +17,47 @@
     <script>
       (function() {
         try {
+          var bridge = window.IGseekNativeBridge;
+          var persistKeys = [
+            'igseek:clean_slate_v6',
+            'igseek:local_user',
+            'igseek:accounts_v1',
+            'igseek:local_db:profiles',
+            'igseek:has_logged_in',
+            'igseek:cloud_uid',
+            'igseek:lang',
+            'igseek:theme',
+            'igseek:accent'
+          ];
+          if (bridge && typeof bridge.getItem === 'function') {
+            for (var bi = 0; bi < persistKeys.length; bi++) {
+              var pk = persistKeys[bi];
+              try {
+                if (!localStorage.getItem(pk)) {
+                  var bVal = bridge.getItem(pk);
+                  if (bVal) localStorage.setItem(pk, bVal);
+                }
+              } catch (e) {}
+            }
+          }
+          try {
+            var cookieMatch = document.cookie.match(/(?:^|;\s*)igseek_sess_v1=([^;]+)/);
+            if (cookieMatch && cookieMatch[1]) {
+              var parsedSess = JSON.parse(decodeURIComponent(cookieMatch[1]));
+              if (parsedSess && parsedSess.v) {
+                if (!localStorage.getItem('igseek:clean_slate_v6')) {
+                  localStorage.setItem('igseek:clean_slate_v6', '1');
+                }
+                if (parsedSess.u && !localStorage.getItem('igseek:local_user')) {
+                  localStorage.setItem('igseek:local_user', JSON.stringify(parsedSess.u));
+                }
+                if (parsedSess.h && !localStorage.getItem('igseek:has_logged_in')) {
+                  localStorage.setItem('igseek:has_logged_in', '1');
+                }
+              }
+            }
+          } catch (e) {}
+
           if (!localStorage.getItem('igseek:clean_slate_v6')) {
             window.__igseekCleanSlateAuthReset = true;
             var keys = [];
@@ -37,6 +78,9 @@
             localStorage.setItem('igseek:clean_slate_v6', '1');
             localStorage.setItem('igseek:lang', 'en');
             localStorage.setItem('igseek:theme', 'light');
+            if (bridge && typeof bridge.setItem === 'function') {
+              try { bridge.setItem('igseek:clean_slate_v6', '1'); } catch (e) {}
+            }
           }
           var lang = localStorage.getItem('igseek:lang') || 'en';
           var doc = document.documentElement;

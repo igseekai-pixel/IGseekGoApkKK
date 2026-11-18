@@ -290,10 +290,112 @@ async function hashPassword(password: string, salt: string): Promise<string> {
   return `${(h1 >>> 0).toString(16)}_${(h2 >>> 0).toString(16)}`;
 }
 
+const SESSION_COOKIE_NAME = 'igseek_sess_v1';
+
+function getNativeBridge(): { getItem?: (k: string) => string | null; setItem?: (k: string, v: string) => void; removeItem?: (k: string) => void } | null {
+  if (typeof window === 'undefined') return null;
+  return (window as any).IGseekNativeBridge || null;
+}
+
+function nativePersistGet(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const val = window.localStorage.getItem(key);
+    if (val) return val;
+  } catch {
+    // ignore
+  }
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.getItem === 'function') {
+      const nVal = bridge.getItem(key);
+      if (nVal) {
+        try {
+          window.localStorage.setItem(key, nVal);
+        } catch {
+          // ignore
+        }
+        return nVal;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function nativePersistSet(key: string, value: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.setItem === 'function') {
+      bridge.setItem(key, value);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function nativePersistRemove(key: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.removeItem === 'function') {
+      bridge.removeItem(key);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function readSessionCookiePayload(): { v?: number; u?: any; h?: number } | null {
+  if (typeof document === 'undefined' || typeof document.cookie !== 'string') return null;
+  try {
+    const m = document.cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE_NAME}=([^;]+)`));
+    if (!m || !m[1]) return null;
+    const parsed = JSON.parse(decodeURIComponent(m[1]));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionCookiePayload(localUserPayload: { uid: string; email: string; displayName: string; token: string } | null, hasLoggedIn: boolean) {
+  if (typeof document === 'undefined') return;
+  try {
+    const secureFlag = typeof window !== 'undefined' && (window as any).location?.protocol === 'https:' ? '; Secure' : '';
+    if (!localUserPayload && !hasLoggedIn) {
+      document.cookie = `${SESSION_COOKIE_NAME}=; Max-Age=0; Path=/; SameSite=Lax${secureFlag}`;
+      return;
+    }
+    const payload = {
+      v: 1,
+      h: hasLoggedIn ? 1 : 0,
+      ...(localUserPayload ? { u: localUserPayload } : {}),
+    };
+    const encoded = encodeURIComponent(JSON.stringify(payload));
+    if (encoded.length <= 3500) {
+      document.cookie = `${SESSION_COOKIE_NAME}=${encoded}; Max-Age=2592000; Path=/; SameSite=Lax${secureFlag}`;
+    }
+  } catch {
+    // ignore cookie errors
+  }
+}
+
 function readLocalAccounts(): Record<string, StoredLocalAccount> {
   if (typeof window === 'undefined') return {};
   try {
-    const raw = window.localStorage.getItem(LOCAL_ACCOUNTS_KEY);
+    const raw = nativePersistGet(LOCAL_ACCOUNTS_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -305,7 +407,7 @@ function readLocalAccounts(): Record<string, StoredLocalAccount> {
 function writeLocalAccounts(accounts: Record<string, StoredLocalAccount>) {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
+    nativePersistSet(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
   } catch {
     // ignore storage errors
   }
@@ -334,7 +436,16 @@ function buildLocalUserObject(payload: { uid: string; email: string; displayName
 function getLocalFallbackUser(): any {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(LOCAL_USER_KEY);
+    let raw = nativePersistGet(LOCAL_USER_KEY);
+    if (!raw) {
+      const cookieData = readSessionCookiePayload();
+      if (cookieData?.u?.uid && cookieData?.u?.email) {
+        raw = JSON.stringify(cookieData.u);
+        nativePersistSet(LOCAL_USER_KEY, raw);
+        nativePersistSet('igseek:clean_slate_v6', '1');
+        nativePersistSet('igseek:has_logged_in', '1');
+      }
+    }
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.uid || !parsed?.email) return null;
@@ -359,8 +470,10 @@ function setLocalFallbackUser(uid: string, email: string, name?: string) {
   };
   if (typeof window !== 'undefined') {
     try {
-      window.localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(payload));
-      window.localStorage.setItem('igseek:has_logged_in', '1');
+      nativePersistSet('igseek:clean_slate_v6', '1');
+      nativePersistSet(LOCAL_USER_KEY, JSON.stringify(payload));
+      nativePersistSet('igseek:has_logged_in', '1');
+      writeSessionCookiePayload(payload, true);
     } catch {
       // ignore
     }
@@ -371,7 +484,8 @@ function setLocalFallbackUser(uid: string, email: string, name?: string) {
 function clearLocalFallbackSession() {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.removeItem(LOCAL_USER_KEY);
+    nativePersistRemove(LOCAL_USER_KEY);
+    writeSessionCookiePayload(null, Boolean(auth.currentUser));
   } catch {
     // ignore
   }
@@ -380,7 +494,8 @@ function clearLocalFallbackSession() {
 function readLocalCollection(collectionName: string): Record<string, any> {
   if (typeof window === 'undefined') return {};
   try {
-    const raw = window.localStorage.getItem(`${LOCAL_DB_PREFIX}${collectionName}`);
+    const key = `${LOCAL_DB_PREFIX}${collectionName}`;
+    const raw = collectionName === 'profiles' ? nativePersistGet(key) : window.localStorage.getItem(key);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -392,7 +507,13 @@ function readLocalCollection(collectionName: string): Record<string, any> {
 function writeLocalCollection(collectionName: string, data: Record<string, any>) {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(`${LOCAL_DB_PREFIX}${collectionName}`, JSON.stringify(data));
+    const key = `${LOCAL_DB_PREFIX}${collectionName}`;
+    const serialized = JSON.stringify(data);
+    if (collectionName === 'profiles') {
+      nativePersistSet(key, serialized);
+    } else {
+      window.localStorage.setItem(key, serialized);
+    }
   } catch {
     // ignore storage quota errors
   }
@@ -1093,11 +1214,12 @@ async function ensureCleanSlateAuthReset(): Promise<void> {
         // ignore
       } finally {
         try {
-          window.localStorage.removeItem('igseek:has_logged_in');
-          window.localStorage.removeItem('igseek:guest');
-          window.localStorage.removeItem('igseek:guest_account');
-          window.localStorage.removeItem(LOCAL_USER_KEY);
-          window.localStorage.removeItem('igseek:cloud_uid');
+          nativePersistRemove('igseek:has_logged_in');
+          nativePersistRemove('igseek:guest');
+          nativePersistRemove('igseek:guest_account');
+          nativePersistRemove(LOCAL_USER_KEY);
+          nativePersistRemove('igseek:cloud_uid');
+          writeSessionCookiePayload(null, false);
         } catch {}
         (window as any).__igseekCleanSlateAuthReset = false;
       }
@@ -1110,11 +1232,29 @@ export const firebaseClient = {
   auth: {
     async getSession() {
       await ensureCleanSlateAuthReset();
+      const quickLocal = getLocalFallbackUser();
+      if (auth.currentUser || quickLocal) {
+        const u = auth.currentUser || quickLocal;
+        if (auth.currentUser) {
+          nativePersistSet('igseek:has_logged_in', '1');
+          nativePersistSet('igseek:clean_slate_v6', '1');
+          writeSessionCookiePayload(null, true);
+        }
+        return {
+          data: {
+            session: userToSession(u),
+          },
+        };
+      }
+
+      const hasLoggedInHint = nativePersistGet('igseek:has_logged_in') === '1' || Boolean(readSessionCookiePayload()?.h);
+      const waitMs = hasLoggedInHint ? 4500 : 1200;
+
       try {
         if (typeof (auth as any).authStateReady === 'function') {
           await Promise.race([
             (auth as any).authStateReady(),
-            new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+            new Promise<void>((resolve) => setTimeout(resolve, waitMs)),
           ]);
         } else if (!auth.currentUser) {
           await new Promise<void>((resolve) => {
@@ -1122,13 +1262,18 @@ export const firebaseClient = {
               unsub();
               resolve();
             });
-            setTimeout(resolve, 1200);
+            setTimeout(resolve, waitMs);
           });
         }
       } catch {
         // ignore auth state hydration errors
       }
       const finalUser = auth.currentUser || getLocalFallbackUser();
+      if (auth.currentUser) {
+        nativePersistSet('igseek:has_logged_in', '1');
+        nativePersistSet('igseek:clean_slate_v6', '1');
+        writeSessionCookiePayload(null, true);
+      }
       return {
         data: {
           session: userToSession(finalUser),
@@ -1138,6 +1283,17 @@ export const firebaseClient = {
 
     onAuthStateChange(callback: (event: string, session: any) => void) {
       authListeners.add(callback);
+      let readyDone = false;
+      if (typeof (auth as any).authStateReady === 'function') {
+        void (auth as any).authStateReady().then(() => {
+          readyDone = true;
+        }).catch(() => {
+          readyDone = true;
+        });
+      } else {
+        readyDone = true;
+      }
+
       const unsubscribeFirebase = onAuthStateChanged(auth, async (u) => {
         if (typeof window !== 'undefined' && (window as any).__igseekCleanSlateAuthReset) {
           await ensureCleanSlateAuthReset();
@@ -1147,8 +1303,28 @@ export const firebaseClient = {
           }
         }
         const activeU = auth.currentUser || u || getLocalFallbackUser();
-        const session = userToSession(activeU);
-        callback(session ? 'SIGNED_IN' : 'SIGNED_OUT', session);
+        if (activeU) {
+          if (auth.currentUser) {
+            nativePersistSet('igseek:has_logged_in', '1');
+            nativePersistSet('igseek:clean_slate_v6', '1');
+            writeSessionCookiePayload(null, true);
+          }
+          callback('SIGNED_IN', userToSession(activeU));
+          return;
+        }
+        if (!readyDone && typeof (auth as any).authStateReady === 'function') {
+          await Promise.race([
+            (auth as any).authStateReady(),
+            new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+          ]).catch(() => {});
+          readyDone = true;
+          const postWaitUser = auth.currentUser || getLocalFallbackUser();
+          if (postWaitUser) {
+            callback('SIGNED_IN', userToSession(postWaitUser));
+            return;
+          }
+        }
+        callback('SIGNED_OUT', null);
       });
       return {
         data: {
@@ -1509,7 +1685,9 @@ export const firebaseClient = {
       }
       clearLocalFallbackSession();
       try {
-        window.localStorage.removeItem('igseek:has_logged_in');
+        nativePersistRemove('igseek:has_logged_in');
+        nativePersistRemove('igseek:cloud_uid');
+        writeSessionCookiePayload(null, false);
       } catch {}
       notifyAuthListeners('SIGNED_OUT', null);
       return { error: null };

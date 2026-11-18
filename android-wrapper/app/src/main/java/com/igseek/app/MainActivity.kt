@@ -2,6 +2,7 @@ package com.igseek.app
 
 import android.annotation.SuppressLint
 import android.app.Dialog
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -22,6 +23,33 @@ class MainActivity : AppCompatActivity() {
     private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
     private var activePopupDialog: Dialog? = null
     private var activePopupWebView: WebView? = null
+
+    private inner class NativeStorageBridge(context: Context) {
+        private val prefs = context.applicationContext.getSharedPreferences(
+            "igseek_persist_prefs",
+            Context.MODE_PRIVATE
+        )
+
+        @JavascriptInterface
+        fun getItem(key: String?): String? {
+            if (key.isNullOrEmpty()) return null
+            return prefs.getString(key, null)
+        }
+
+        @JavascriptInterface
+        fun setItem(key: String?, value: String?) {
+            if (key.isNullOrEmpty()) return
+            prefs.edit().putString(key, value ?: "").commit()
+        }
+
+        @JavascriptInterface
+        fun removeItem(key: String?) {
+            if (key.isNullOrEmpty()) return
+            prefs.edit().remove(key).commit()
+        }
+    }
+
+    private lateinit var nativeBridge: NativeStorageBridge
 
     // Target web app URL
     private val TARGET_URL = "https://chats-igseek-2026.ai.studio"
@@ -142,6 +170,7 @@ class MainActivity : AppCompatActivity() {
                 1f
             )
             configureSettings(settings)
+            addJavascriptInterface(nativeBridge, "IGseekNativeBridge")
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
         }
 
@@ -245,11 +274,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        nativeBridge = NativeStorageBridge(this)
+
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
 
         webView = WebView(this).apply {
             configureSettings(settings)
+            addJavascriptInterface(nativeBridge, "IGseekNativeBridge")
             cookieManager.setAcceptThirdPartyCookies(this, true)
 
             webViewClient = object : WebViewClient() {
@@ -291,6 +323,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        try {
+            CookieManager.getInstance().flush()
+        } catch (_: Exception) {
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
         try {
             CookieManager.getInstance().flush()
         } catch (_: Exception) {
