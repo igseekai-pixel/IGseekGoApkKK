@@ -17,22 +17,26 @@
     <script>
       (function() {
         try {
-          if (!localStorage.getItem('igseek:clean_slate_v5')) {
+          if (!localStorage.getItem('igseek:clean_slate_v6')) {
+            window.__igseekCleanSlateAuthReset = true;
             var keys = [];
             for (var i = 0; i < localStorage.length; i++) {
               var k = localStorage.key(i);
-              if (k && k.indexOf('igseek:') === 0) keys.push(k);
-            }
-            keys.forEach(function(k) { localStorage.removeItem(k); });
-            localStorage.setItem('igseek:clean_slate_v5', '1');
-            localStorage.setItem('igseek:lang', 'en');
-            localStorage.setItem('igseek:theme', 'light');
-            for (var j = localStorage.length - 1; j >= 0; j--) {
-              var keyName = localStorage.key(j);
-              if (keyName && (keyName.indexOf('supabase.auth') !== -1 || keyName.indexOf('sb-') !== -1)) {
-                localStorage.removeItem(keyName);
+              if (
+                k &&
+                (k.indexOf('igseek:') === 0 ||
+                  k.indexOf('firebase:') === 0 ||
+                  k.indexOf('supabase') !== -1 ||
+                  k.indexOf('sb-') !== -1)
+              ) {
+                keys.push(k);
               }
             }
+            keys.forEach(function(k) { localStorage.removeItem(k); });
+            try { sessionStorage.clear(); } catch (e) {}
+            localStorage.setItem('igseek:clean_slate_v6', '1');
+            localStorage.setItem('igseek:lang', 'en');
+            localStorage.setItem('igseek:theme', 'light');
           }
           var lang = localStorage.getItem('igseek:lang') || 'en';
           var doc = document.documentElement;

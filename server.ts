@@ -225,6 +225,29 @@ app.all(['/api/auth/github', '/api/auth/github/*'], async (req, res) => {
   }
 });
 
+app.get('/api/legal', async (req, res) => {
+  try {
+    const webReq = await toWebRequest(req);
+
+    let handleLegalRequest: (r: Request) => Promise<Response>;
+    if (viteDevServer) {
+      const mod = await viteDevServer.ssrLoadModule('/src/routes/api/legal.ts');
+      handleLegalRequest = mod.handleLegalRequest;
+    } else {
+      const mod = await import('./src/routes/api/legal.ts');
+      handleLegalRequest = mod.handleLegalRequest;
+    }
+
+    const webRes = await handleLegalRequest(webReq);
+    await pipeWebResponse(webRes, res);
+  } catch (err: any) {
+    console.error('API /api/legal error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message || 'Internal server error' });
+    }
+  }
+});
+
 async function startServer() {
   if (!isProduction && !isBundledServer) {
     const { createServer } = await import('vite');

@@ -138,7 +138,7 @@ export function getActiveCloudUid(): string | null {
 /* ==================== ENGINE PROJECTS SYNC ==================== */
 
 export async function listCloudEngineProjectIds(uid: string): Promise<string[]> {
-  if (!uid) return [];
+  if (!uid || !auth.currentUser || uid.startsWith("local_")) return [];
   try {
     const snap = await getDocs(
       query(collection(db, "engine_projects"), where("userId", "==", uid))
@@ -158,7 +158,7 @@ export async function loadCloudEngineProject(
   uid: string,
   chatId: string
 ): Promise<CloudEngineProject | null> {
-  if (!uid || !chatId) return null;
+  if (!uid || !chatId || !auth.currentUser || uid.startsWith("local_")) return null;
   const docId = sanitizeDocId(chatId);
   try {
     const snap = await getDoc(doc(db, "engine_projects", docId));
@@ -198,7 +198,7 @@ export async function saveCloudEngineProject(
     chatMessages: CloudEngineMessage[];
   }
 ): Promise<void> {
-  if (!uid || !input.id) return;
+  if (!uid || !input.id || !auth.currentUser || uid.startsWith("local_")) return;
   const docId = sanitizeDocId(input.id);
   const now = new Date().toISOString();
 
@@ -261,7 +261,7 @@ export async function saveCloudEngineProject(
 }
 
 export async function deleteCloudEngineProject(uid: string, chatId: string): Promise<void> {
-  if (!uid || !chatId) return;
+  if (!uid || !chatId || !auth.currentUser || uid.startsWith("local_")) return;
   const docId = sanitizeDocId(chatId);
   try {
     await deleteDoc(doc(db, "engine_projects", docId));
@@ -276,6 +276,9 @@ export function subscribeCloudLibraryFiles(
   uid: string,
   onFiles: (files: SyncedLibraryFile[]) => void
 ): Unsubscribe {
+  if (!uid || !auth.currentUser || uid.startsWith("local_")) {
+    return () => {};
+  }
   const q = query(collection(db, "library_files"), where("userId", "==", uid));
   return onSnapshot(
     q,
@@ -313,7 +316,7 @@ export async function upsertCloudLibraryFiles(
   uid: string,
   files: SyncedLibraryFile[]
 ): Promise<void> {
-  if (!uid || !files.length) return;
+  if (!uid || !files.length || !auth.currentUser || uid.startsWith("local_")) return;
   for (const f of files) {
     if (!f.id || !f.name) continue;
     const docId = sanitizeDocId(f.id);
@@ -350,7 +353,7 @@ export async function renameCloudLibraryFile(
   fileId: string,
   newName: string
 ): Promise<void> {
-  if (!uid || !fileId || !newName) return;
+  if (!uid || !fileId || !newName || !auth.currentUser || uid.startsWith("local_")) return;
   const docId = sanitizeDocId(fileId);
   try {
     await updateDoc(doc(db, "library_files", docId), {
@@ -367,7 +370,7 @@ export async function renameCloudLibraryFile(
 }
 
 export async function deleteCloudLibraryFile(uid: string, fileId: string): Promise<void> {
-  if (!uid || !fileId) return;
+  if (!uid || !fileId || !auth.currentUser || uid.startsWith("local_")) return;
   const docId = sanitizeDocId(fileId);
   try {
     await deleteDoc(doc(db, "library_files", docId));
@@ -385,7 +388,7 @@ export async function deleteCloudLibraryFile(uid: string, fileId: string): Promi
 export async function fetchCloudChatMessagesForLibrary(
   uid: string
 ): Promise<CloudChatMessageForLibrary[]> {
-  if (!uid) return [];
+  if (!uid || !auth.currentUser || uid.startsWith("local_")) return [];
   try {
     const snap = await getDocs(
       query(collection(db, "chat_messages"), where("user_id", "==", uid))

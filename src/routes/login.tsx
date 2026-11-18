@@ -38,7 +38,7 @@ export const Route = createFileRoute("/login")({
     const { data } = await firebaseClient.auth.getSession();
     if (data.session) {
       const target = isSafeNext(search.next) ? search.next : "/app";
-      throw redirect({ href: target });
+      throw redirect({ to: target as any, replace: true });
     }
   },
   component: LoginPage,
@@ -47,6 +47,7 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const { next } = Route.useSearch();
   const safeNext = isSafeNext(next) ? next : "/app";
+  const navigate = useNavigate();
   const [theme, setTheme] = useTheme();
   const lang = useLang();
   const t = useT();
@@ -120,13 +121,7 @@ function LoginPage() {
 
       <AuthCard
         onSuccess={() => {
-          window.location.href = safeNext;
-        }}
-        onGuestContinue={(name, email) => {
-          const cleanName = (name || email?.split("@")[0] || t("User")).trim().slice(0, 60);
-          const cleanEmail = (email || "").trim();
-          window.localStorage.setItem("igseek:guest", JSON.stringify({ name: cleanName, email: cleanEmail, at: Date.now() }));
-          window.location.href = safeNext;
+          void navigate({ to: safeNext as any, replace: true });
         }}
       />
     </div>

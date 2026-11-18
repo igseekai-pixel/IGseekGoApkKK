@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Mail,
@@ -13,14 +13,14 @@ import {
   Palette,
   Check,
 } from "lucide-react";
-import { firebaseClient, formatAuthError } from "@/lib/firebase-service";
+import { firebaseClient, formatAuthError, isEmbeddedWebView } from "@/lib/firebase-service";
 import { readStoredLang, useLang, useT } from "@/lib/i18n";
 import { ACCENT_PRESETS, applyAccent, getStoredTheme, type AccentId } from "@/lib/theme";
 import { PRIVACY_POLICY_URL, USER_AGREEMENT_URL } from "@/lib/legal";
+import { LegalDocModal, type LegalDocType } from "@/components/auth/LegalDocModal";
 
 interface AuthCardProps {
   onSuccess?: () => void;
-  onGuestContinue?: (name?: string, email?: string) => void;
   defaultMode?: "signin" | "signup";
   className?: string;
   isModal?: boolean;
@@ -29,7 +29,6 @@ interface AuthCardProps {
 
 export function AuthCard({
   onSuccess,
-  onGuestContinue,
   defaultMode = "signin",
   className = "",
   isModal = false,
@@ -38,10 +37,11 @@ export function AuthCard({
   const t = useT();
   const lang = useLang();
 
+  const [isApkWebView, setIsApkWebView] = useState<boolean>(() => isEmbeddedWebView());
   const [mode, setMode] = useState<"signin" | "signup">(defaultMode);
   const [signupStep, setSignupStep] = useState<"credentials" | "accent">("credentials");
   const [selectedAccent, setSelectedAccent] = useState<AccentId | null>(null);
-  const [showEmailForm, setShowEmailForm] = useState(false);
+  const [showEmailForm, setShowEmailForm] = useState<boolean>(() => isEmbeddedWebView());
   const [isForgot, setIsForgot] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -54,6 +54,18 @@ export function AuthCard({
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
   const [consentAttempted, setConsentAttempted] = useState(false);
+  const [legalDoc, setLegalDoc] = useState<{
+    type: LegalDocType;
+    title: string;
+    url: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (isEmbeddedWebView()) {
+      setIsApkWebView(true);
+      setShowEmailForm(true);
+    }
+  }, []);
 
   const passwordsMatch = !confirmPassword || password === confirmPassword;
   const signupConsentsAccepted = acceptedTerms && acceptedPrivacy;
@@ -78,6 +90,9 @@ export function AuthCard({
       }
       onSuccess?.();
     } catch (err: any) {
+      if (err?.code === "auth/webview-google-blocked" || isEmbeddedWebView()) {
+        setShowEmailForm(true);
+      }
       setError(formatAuthError(err, lang));
     } finally {
       setLoading(null);
@@ -124,6 +139,7 @@ export function AuthCard({
       }
       onSuccess?.();
     } catch (err: any) {
+      setSignupStep("credentials");
       setError(formatAuthError(err, lang));
     } finally {
       setLoading(null);
@@ -204,12 +220,6 @@ export function AuthCard({
         password,
       });
       if (res.error) {
-        if (onGuestContinue) {
-          const name = email.trim().split("@")[0] || t("User");
-          onGuestContinue(name, email.trim());
-          onSuccess?.();
-          return;
-        }
         throw res.error;
       }
       try {
@@ -220,12 +230,6 @@ export function AuthCard({
       }
       onSuccess?.();
     } catch (err: any) {
-      if (onGuestContinue) {
-        const name = email.trim().split("@")[0] || t("User");
-        onGuestContinue(name, email.trim());
-        onSuccess?.();
-        return;
-      }
       setError(formatAuthError(err, lang));
     } finally {
       setLoading(null);
@@ -266,6 +270,7 @@ export function AuthCard({
           onClick={() => {
             setMode("signin");
             setSignupStep("credentials");
+            setShowEmailForm(isApkWebView);
             setIsForgot(false);
             setConsentAttempted(false);
             setError(null);
@@ -329,7 +334,7 @@ export function AuthCard({
       </div>
 
       {/* Main Body */}
-      {!showEmailForm && mode === "signin" && !isForgot ? (
+      {!isApkWebView && !showEmailForm && mode === "signin" && !isForgot ? (
         <div className="w-full flex flex-col gap-3">
           {/* Button 1: Google */}
           <button
@@ -476,22 +481,36 @@ export function AuthCard({
       ) : (
         /* Form view for email input / registration step 1 / forgot password */
         <form onSubmit={handleFormSubmit} className="w-full flex flex-col gap-3 text-left">
-          {/* Back button */}
-          <button
-            type="button"
-            onClick={() => {
-              setMode("signin");
-              setShowEmailForm(false);
-              setIsForgot(false);
-              setError(null);
-            }}
-            className="self-start flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-1 transition-colors"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            <span>{t("All sign-in options")}</span>
-          </button>
+          {/* Back button (when returning to sign-in options on web, or leaving Forgot Password in APK) */}
+          {(!isApkWebView || isForgot) && (
+            <button
+              type="button"
+              onClick={() => {
+                if (isApkWebView && isForgot) {
+                  setIsForgot(false);
+                  setError(null);
+                  setSuccessMessage(null);
+                } else {
+                  setMode("signin");
+                  setShowEmailForm(false);
+                  setIsForgot(false);
+                  setError(null);
+                }
+              }}
+              className="self-start flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-1 transition-colors"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>{isApkWebView ? t("Back") : t("All sign-in options")}</span>
+            </button>
+          )}
 
-          {mode === "signup" && !isForgot && (
+          {isApkWebView && !isForgot && (
+            <p className="text-xs text-muted-foreground text-center mb-1">
+              {t("Use email and password in the mobile app.")}
+            </p>
+          )}
+
+          {!isApkWebView && mode === "signup" && !isForgot && (
             <>
               <button
                 type="button"
@@ -596,6 +615,11 @@ export function AuthCard({
               </button>
             </div>
           )}
+          {mode === "signup" && !isForgot && confirmPassword && !passwordsMatch && (
+            <p className="px-3 text-[11px] text-red-500">
+              {t("Passwords do not match. Please check your input.")}
+            </p>
+          )}
 
           {/* Mandatory legal agreement checkboxes (signup only) */}
           {mode === "signup" && !isForgot && (
@@ -622,14 +646,30 @@ export function AuthCard({
                   <label htmlFor="signup-accept-terms" className="cursor-pointer">
                     {t("I accept the")}{" "}
                   </label>
-                  <a
-                    href={USER_AGREEMENT_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium text-[var(--brand)] underline underline-offset-2 hover:brightness-110"
-                  >
-                    {t("User Agreement")}
-                  </a>
+                  {isApkWebView ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setLegalDoc({
+                          type: "terms",
+                          title: t("User Agreement"),
+                          url: USER_AGREEMENT_URL,
+                        })
+                      }
+                      className="font-medium text-[var(--brand)] underline underline-offset-2 hover:brightness-110 text-left"
+                    >
+                      {t("User Agreement")}
+                    </button>
+                  ) : (
+                    <a
+                      href={USER_AGREEMENT_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-[var(--brand)] underline underline-offset-2 hover:brightness-110"
+                    >
+                      {t("User Agreement")}
+                    </a>
+                  )}
                   <span className="text-red-500 ml-0.5">*</span>
                 </div>
               </div>
@@ -656,14 +696,30 @@ export function AuthCard({
                   <label htmlFor="signup-accept-privacy" className="cursor-pointer">
                     {t("I accept the")}{" "}
                   </label>
-                  <a
-                    href={PRIVACY_POLICY_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium text-[var(--brand)] underline underline-offset-2 hover:brightness-110"
-                  >
-                    {t("Privacy Policy (consent)")}
-                  </a>
+                  {isApkWebView ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setLegalDoc({
+                          type: "privacy",
+                          title: t("Privacy Policy"),
+                          url: PRIVACY_POLICY_URL,
+                        })
+                      }
+                      className="font-medium text-[var(--brand)] underline underline-offset-2 hover:brightness-110 text-left"
+                    >
+                      {t("Privacy Policy (consent)")}
+                    </button>
+                  ) : (
+                    <a
+                      href={PRIVACY_POLICY_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-[var(--brand)] underline underline-offset-2 hover:brightness-110"
+                    >
+                      {t("Privacy Policy (consent)")}
+                    </a>
+                  )}
                   <span className="text-red-500 ml-0.5">*</span>
                 </div>
               </div>
@@ -686,7 +742,7 @@ export function AuthCard({
           {/* Submit button */}
           <button
             type="submit"
-            disabled={loading !== null || (mode === "signup" && !passwordsMatch)}
+            disabled={loading !== null}
             className="mt-1 w-full rounded-full bg-[var(--brand)] hover:brightness-110 text-white py-3 px-5 text-sm font-semibold transition-all shadow-md shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
           >
             {loading === "form" ? (
@@ -702,46 +758,69 @@ export function AuthCard({
         </form>
       )}
 
-      {/* Instant 1-click continue fallback */}
-      {onGuestContinue && signupStep === "credentials" && mode === "signin" && (
-        <div className="mt-4 w-full">
-          <button
-            type="button"
-            onClick={() => {
-              const name = email.trim() ? email.trim().split("@")[0] : t("Guest");
-              const userEmail = email.trim() || "guest@igseek.ai";
-              onGuestContinue(name, userEmail);
-              onSuccess?.();
-            }}
-            className="w-full text-center text-xs text-muted-foreground hover:text-foreground py-1 transition-colors"
-          >
-            {t("Quick sign-in without password")}
-          </button>
-        </div>
-      )}
+
 
       {/* Footer text with links matching brand accent */}
       <p className="mt-7 text-center text-[11px] leading-relaxed text-muted-foreground max-w-xs">
         {t("By continuing, you agree to our")}
         <br />
-        <a
-          href={USER_AGREEMENT_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[var(--brand)] hover:underline"
-        >
-          {t("Terms of Use")}
-        </a>{" "}
+        {isApkWebView ? (
+          <button
+            type="button"
+            onClick={() =>
+              setLegalDoc({
+                type: "terms",
+                title: t("User Agreement"),
+                url: USER_AGREEMENT_URL,
+              })
+            }
+            className="text-[var(--brand)] hover:underline"
+          >
+            {t("Terms of Use")}
+          </button>
+        ) : (
+          <a
+            href={USER_AGREEMENT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[var(--brand)] hover:underline"
+          >
+            {t("Terms of Use")}
+          </a>
+        )}{" "}
         {t("and")}{" "}
-        <a
-          href={PRIVACY_POLICY_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[var(--brand)] hover:underline"
-        >
-          {t("Privacy Policy")}
-        </a>
+        {isApkWebView ? (
+          <button
+            type="button"
+            onClick={() =>
+              setLegalDoc({
+                type: "privacy",
+                title: t("Privacy Policy"),
+                url: PRIVACY_POLICY_URL,
+              })
+            }
+            className="text-[var(--brand)] hover:underline"
+          >
+            {t("Privacy Policy")}
+          </button>
+        ) : (
+          <a
+            href={PRIVACY_POLICY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[var(--brand)] hover:underline"
+          >
+            {t("Privacy Policy")}
+          </a>
+        )}
       </p>
+
+      <LegalDocModal
+        docType={legalDoc?.type ?? null}
+        fallbackTitle={legalDoc?.title ?? ""}
+        externalUrl={legalDoc?.url ?? USER_AGREEMENT_URL}
+        onClose={() => setLegalDoc(null)}
+      />
     </div>
   );
 }

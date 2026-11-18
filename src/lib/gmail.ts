@@ -1,5 +1,6 @@
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
+import { isEmbeddedWebView } from './firebase-service';
 import { getCachedCalendarToken } from './google-calendar';
 
 export interface GmailMessageHeader {
@@ -59,6 +60,11 @@ export function setCachedGmailToken(token: string | null): void {
  * Initiates Google OAuth popup with Gmail scopes
  */
 export async function connectGmail(): Promise<{ accessToken: string; userEmail?: string } | null> {
+  if (isEmbeddedWebView()) {
+    const err = new Error('Google sign-in is blocked inside the APK WebView.') as Error & { code: string };
+    err.code = 'auth/webview-google-blocked';
+    throw err;
+  }
   try {
     const gmailScopes = [
       'https://mail.google.com/',

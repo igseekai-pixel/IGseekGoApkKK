@@ -4,10 +4,11 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { makeT, localeFor, readStoredLang, syncDocumentLang, useLang, type LangCode as I18nLang } from "@/lib/i18n";
 
-import { firebaseClient as supabase, waitForAuthProfileSetup } from "@/lib/firebase-service";
+import { firebaseClient as supabase, isEmbeddedWebView, waitForAuthProfileSetup } from "@/lib/firebase-service";
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 import { lovable } from "@/integrations/lovable";
 import { AuthCard } from "@/components/auth/AuthCard";
+import { LegalDocModal, type LegalDocType } from "@/components/auth/LegalDocModal";
 import { PRIVACY_POLICY_URL, USER_AGREEMENT_URL } from "@/lib/legal";
 import { useTheme, useAccent, applyAccent, ACCENT_PRESETS, type AccentId } from "@/lib/theme";
 import {
@@ -527,11 +528,24 @@ function Index() {
     };
   }, [user?.id, isGuest]);
 
+  const loadProfileRef = useRef<((authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }) => Promise<void>) | null>(null);
+
+  const syncSessionNow = async () => {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user && loadProfileRef.current) {
+      await loadProfileRef.current(data.session.user);
+    }
+  };
+
   // Auth: subscribe, then hydrate
   useEffect(() => {
     let cancelled = false;
+    let activeLoadUid: string | null = null;
 
     const loadProfile = async (authUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }) => {
+      if (activeLoadUid === authUser.id) return;
+      activeLoadUid = authUser.id;
+      try {
       ensureAccountScope(authUser.id);
       await waitForAuthProfileSetup();
       if (cancelled) return;
@@ -636,7 +650,11 @@ function Index() {
           return next;
         });
       });
+      } finally {
+        if (activeLoadUid === authUser.id) activeLoadUid = null;
+      }
     };
+    loadProfileRef.current = loadProfile;
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.user) {
@@ -671,20 +689,9 @@ function Index() {
       } else {
         pendingOnboardingUidRef.current = null;
         setNeedsAccentOnboarding(false);
-        const guest = readGuestAccount() ?? { name: "Me Coder", email: "mecoder525@gmail.com" };
-        setUser({ id: GUEST_ID, name: guest.name, email: guest.email, plan: "free", since: new Date().toISOString() });
-        const store = readGuestStore();
-        if (store.chats.length === 0) {
-          const tInit = makeT(readStoredLang());
-          store.chats = [{ id: "welcome-chat", title: tInit("Welcome"), updated_at: new Date().toISOString(), is_saved: false, project_id: null }];
-          store.messages["welcome-chat"] = [
-            { id: "msg-1", role: "user", content: tInit("Hello!"), position: 0 },
-            { id: "msg-2", role: "assistant", content: tInit("Hello! 👋\nHow can I help you today?"), position: 1 },
-          ];
-          writeGuestStore(store);
-        }
-        setChats(store.chats);
-        setProjects(readGuestProjects());
+        setUser(null);
+        setChats([]);
+        setProjects([]);
         setPrefsHydrated(true);
         setAuthReady(true);
       }
@@ -692,6 +699,7 @@ function Index() {
 
     return () => {
       cancelled = true;
+      loadProfileRef.current = null;
       sub.subscription.unsubscribe();
     };
   }, []);
@@ -1882,8 +1890,21 @@ function Index() {
 
 
 
+  if (!hydrated || !authReady) {
+    return (
+      <TContext.Provider value={t}>
+        <div className="flex min-h-screen w-full items-center justify-center bg-background text-foreground">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+            <span className="text-xs text-muted-foreground uppercase tracking-widest">IGseek</span>
+          </div>
+        </div>
+      </TContext.Provider>
+    );
+  }
+
   // Экран авторизации (Google + Email / Пароль + Регистрация с подтверждением пароля)
-  if (hydrated && authReady && !user) {
+  if (!user) {
     return (
       <TContext.Provider value={t}>
         <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-background px-4 py-8 text-foreground">
@@ -1897,15 +1918,7 @@ function Index() {
           />
           <AuthCard
             onSuccess={() => {
-              // Firebase onAuthStateChange fires and sets user profile
-            }}
-            onGuestContinue={(name, email) => {
-              const cleanName = (name || email?.split("@")[0] || t("User")).trim().slice(0, 60);
-              const cleanEmail = (email || "").trim();
-              window.localStorage.setItem(GUEST_KEY, JSON.stringify({ name: cleanName, email: cleanEmail, at: Date.now() }));
-              setUser({ id: GUEST_ID, name: cleanName, email: cleanEmail, plan: "free", since: new Date().toISOString() });
-              setChats(readGuestStore().chats);
-              setPrefsHydrated(true);
+              void syncSessionNow();
             }}
           />
         </div>
@@ -2229,14 +2242,14 @@ function Index() {
               className="w-full rounded-2xl border border-zinc-200 dark:border-white/10 bg-zinc-100 hover:bg-zinc-200/80 dark:bg-[#161618]/90 dark:hover:bg-[#1f1f23] p-2.5 flex items-center gap-3 text-left transition-all shadow-sm active:scale-98"
             >
               <div className="relative h-9 w-9 shrink-0 rounded-full bg-black dark:bg-[var(--brand)] flex items-center justify-center text-xs font-bold text-white shadow-sm">
-                {(user!.name || "Me Coder").split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase()}
+                {(user!.name || user!.email || "User").split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold text-zinc-900 dark:text-white truncate leading-tight">
-                  {user!.name || "Me Coder"}
+                  {user!.name || user!.email?.split("@")[0] || "User"}
                 </div>
                 <div className="text-xs text-zinc-500 dark:text-zinc-400 truncate leading-tight mt-0.5">
-                  {user!.email || "mecoder525@gmail.com"}
+                  {user!.email || ""}
                 </div>
               </div>
               <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400 dark:text-zinc-500 -rotate-90" />
@@ -4244,11 +4257,12 @@ const MessageBubble = memo(function MessageBubble({
     } catch {
       /* ignore */
     }
-    if (fromLongPress && pointerDownActiveRef.current) {
-      backdropArmedRef.current = false;
-    } else {
-      scheduleBackdropArm(180);
+    backdropArmedRef.current = false;
+    if (armTimerRef.current !== null) {
+      window.clearTimeout(armTimerRef.current);
+      armTimerRef.current = null;
     }
+    scheduleBackdropArm(fromLongPress ? 500 : 250);
     setMenuOpen(true);
   };
 
@@ -7620,18 +7634,27 @@ function WaveView({ onGoToChat }: { onGoToChat: () => void }) {
 
 function DocsView() {
   const t = useT();
-  const docs = [
+  const inWebView = isEmbeddedWebView();
+  const [activeDoc, setActiveDoc] = useState<{
+    type: LegalDocType;
+    title: string;
+    url: string;
+  } | null>(null);
+  const docs: Array<{ type: LegalDocType; title: string; desc: string; href: string }> = [
     {
+      type: "terms",
       title: t("User Agreement"),
       desc: t("General terms of use."),
       href: USER_AGREEMENT_URL,
     },
     {
+      type: "privacy",
       title: t("Privacy Policy"),
       desc: t("How we handle your data."),
       href: PRIVACY_POLICY_URL,
     },
     {
+      type: "ai",
       title: t("Project & AI Agreement"),
       desc: t("Rules that cover the project and its AI."),
       href: "https://telegra.ph/Polzovatelskoe-soglashenie-proekta-i-nejroseti-06-24",
@@ -7652,28 +7675,50 @@ function DocsView() {
       </div>
 
       <div className="mt-8 grid grid-cols-1 gap-3">
-        {docs.map((d) => (
-          <a
-            key={d.href}
-            href={d.href}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="group flex items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4 transition-colors hover:border-brand/50"
-          >
-            <div className="flex items-start gap-3 min-w-0">
-              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-elevated">
-                <FileText className="h-4 w-4 text-brand" />
+        {docs.map((d) =>
+          inWebView ? (
+            <button
+              key={d.href}
+              type="button"
+              onClick={() => setActiveDoc({ type: d.type, title: d.title, url: d.href })}
+              className="group flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4 text-left transition-colors hover:border-brand/50 cursor-pointer"
+            >
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-elevated">
+                  <FileText className="h-4 w-4 text-brand" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">{d.title}</div>
+                  <p className="mt-0.5 text-[12px] text-muted-foreground truncate">{d.desc}</p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <div className="text-sm font-medium truncate">{d.title}</div>
-                <p className="mt-0.5 text-[12px] text-muted-foreground truncate">{d.desc}</p>
+              <span className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground group-hover:border-brand/50 group-hover:text-brand">
+                {t("Open")} <ArrowUpRight className="h-3 w-3" />
+              </span>
+            </button>
+          ) : (
+            <a
+              key={d.href}
+              href={d.href}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="group flex items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4 transition-colors hover:border-brand/50"
+            >
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-elevated">
+                  <FileText className="h-4 w-4 text-brand" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">{d.title}</div>
+                  <p className="mt-0.5 text-[12px] text-muted-foreground truncate">{d.desc}</p>
+                </div>
               </div>
-            </div>
-            <span className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground group-hover:border-brand/50 group-hover:text-brand">
-              {t("Open")} <ArrowUpRight className="h-3 w-3" />
-            </span>
-          </a>
-        ))}
+              <span className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground group-hover:border-brand/50 group-hover:text-brand">
+                {t("Open")} <ArrowUpRight className="h-3 w-3" />
+              </span>
+            </a>
+          ),
+        )}
       </div>
 
       <div className="mt-6 rounded-xl border border-border bg-surface p-4">
@@ -7692,6 +7737,13 @@ function DocsView() {
         </a>
         <p className="mt-1 text-[12px] text-muted-foreground">{t("Reach out on Telegram")}</p>
       </div>
+
+      <LegalDocModal
+        docType={activeDoc?.type ?? null}
+        fallbackTitle={activeDoc?.title ?? ""}
+        externalUrl={activeDoc?.url ?? USER_AGREEMENT_URL}
+        onClose={() => setActiveDoc(null)}
+      />
     </div>
   );
 }
@@ -8510,8 +8562,9 @@ function ProfileModal({
                           }
                         }
                         keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+                        window.sessionStorage.clear();
                       } catch {}
-                      window.location.reload();
+                      window.location.href = "/";
                     }
                   }}
                   className="glass-button inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 transition-colors cursor-pointer"

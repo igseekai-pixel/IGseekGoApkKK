@@ -53,22 +53,10 @@ export const Route = createFileRoute("/")({
   beforeLoad: async () => {
     if (typeof window === "undefined") return;
     const { data } = await firebaseClient.auth.getSession();
-    const hasGuestAccount = (() => {
+    if (data.session?.user) {
       try {
-        const raw = window.localStorage.getItem("igseek:guest");
-        if (!raw) return false;
-        const parsed = JSON.parse(raw);
-        return typeof parsed?.name === "string" && parsed.name.trim().length > 0;
-      } catch {
-        return false;
-      }
-    })();
-    if (data.session?.user || hasGuestAccount) {
-      if (data.session?.user) {
-        try {
-          window.localStorage.setItem("igseek:has_logged_in", "1");
-        } catch {}
-      }
+        window.localStorage.setItem("igseek:has_logged_in", "1");
+      } catch {}
       throw redirect({ to: "/app", replace: true });
     }
     try {
@@ -577,6 +565,7 @@ function Landing() {
   };
   const [checkingSession, setCheckingSession] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
+    if ((window as any).__igseekCleanSlateAuthReset) return false;
     return Boolean(auth.currentUser) || window.localStorage.getItem("igseek:has_logged_in") === "1";
   });
 
@@ -593,21 +582,10 @@ function Landing() {
       }
     };
 
-    if (auth.currentUser) {
+    if (!(window as any).__igseekCleanSlateAuthReset && auth.currentUser) {
       goToApp(true);
       return;
     }
-
-    try {
-      const rawGuest = window.localStorage.getItem("igseek:guest");
-      if (rawGuest) {
-        const parsed = JSON.parse(rawGuest);
-        if (typeof parsed?.name === "string" && parsed.name.trim()) {
-          goToApp(false);
-          return;
-        }
-      }
-    } catch {}
 
     void firebaseClient.auth.getSession().then(({ data }) => {
       if (cancelled) return;
@@ -633,7 +611,7 @@ function Landing() {
     };
   }, [navigate]);
 
-  if (checkingSession || (typeof window !== "undefined" && auth.currentUser)) {
+  if (checkingSession || (typeof window !== "undefined" && !(window as any).__igseekCleanSlateAuthReset && auth.currentUser)) {
     return (
       <div className="flex min-h-screen w-full items-center justify-center bg-background text-foreground">
         <div className="flex flex-col items-center gap-3">

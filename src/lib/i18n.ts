@@ -731,6 +731,13 @@ const DICT: Record<string, Dict> = {
   "Find. Analyze. Create.": { ru: "Ищите. Анализируйте. Создавайте.", es: "Busca. Analiza. Crea.", fr: "Trouvez. Analysez. Créez.", ar: "ابحث. حلّل. أنشئ." },
   "Sign in with Google": { ru: "Войти через Google", es: "Iniciar sesión con Google", fr: "Se connecter avec Google", ar: "تسجيل الدخول عبر Google" },
   "Sign in with email": { ru: "Войти по почте", es: "Iniciar sesión con correo", fr: "Se connecter par e-mail", ar: "تسجيل الدخول بالبريد الإلكتروني" },
+  "Use email and password in the mobile app.": {
+    en: "Use email and password in the mobile app.",
+    ru: "В мобильном приложении используйте вход или регистрацию по почте и паролю.",
+    es: "Usa tu correo y contraseña en la aplicación móvil.",
+    fr: "Utilisez votre e-mail et mot de passe dans l'application mobile.",
+    ar: "استخدم البريد الإلكتروني وكلمة المرور في تطبيق الهاتف.",
+  },
   "Choose interface accent color": { ru: "Выберите акцентный цвет интерфейса", es: "Elige el color de acento de la interfaz", fr: "Choisissez la couleur d'accentuation de l'interface", ar: "اختر لون التمييز للواجهة" },
   "Step 2 of 2 · Required for registration": { ru: "Шаг 2 из 2 · Обязательно при регистрации", es: "Paso 2 de 2 · Obligatorio al registrarse", fr: "Étape 2 sur 2 · Obligatoire à l'inscription", ar: "الخطوة 2 من 2 · إلزامي عند التسجيل" },
   "Pick the highlight color you want for IGseek. You can change it anytime later in Settings.": { ru: "Выберите желаемый цвет выделения для IGseek. Позже его можно в любой момент изменить в настройках.", es: "Elige el color de acento que prefieras para IGseek. Podrás cambiarlo más adelante en Ajustes.", fr: "Choisissez la couleur de mise en valeur souhaitée pour IGseek. Vous pourrez la modifier plus tard dans les Paramètres.", ar: "اختر لون التمييز الذي تفضله لـ IGseek. يمكنك تغييره لاحقًا في الإعدادات." },
@@ -757,6 +764,13 @@ const DICT: Record<string, Dict> = {
     es: "Debes aceptar el Acuerdo de usuario y la Política de privacidad para registrarte.",
     fr: "Vous devez accepter le Contrat d'utilisation et la Politique de confidentialité pour vous inscrire.",
     ar: "يجب قبول اتفاقية المستخدم وسياسة الخصوصية للتسجيل.",
+  },
+  "Loading document...": {
+    en: "Loading document...",
+    ru: "Загрузка документа...",
+    es: "Cargando documento...",
+    fr: "Chargement du document...",
+    ar: "جارٍ تحميل المستند...",
   },
 
   // Accent preset names

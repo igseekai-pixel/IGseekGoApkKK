@@ -50,6 +50,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  auth,
   db,
   collection,
   query,
@@ -262,7 +263,10 @@ export function FlowView({
 }) {
   const lang = useLang();
   const t = useT();
-  const firestoreUserId = userId && userId !== "guest" ? userId : null;
+  const firestoreUserId =
+    userId && userId !== "guest" && !userId.startsWith("local_") && Boolean(auth.currentUser)
+      ? userId
+      : null;
   const usageUid = firestoreUserId || "guest";
   const { usage: promptUsage, limits: promptLimits } = usePromptLimits(usageUid);
   const flowUsed = promptUsage.flow;

@@ -160,6 +160,7 @@ function serializeProfilePromptPayload(snapshot: PromptLimitsSnapshot) {
 }
 
 function syncProfileToCloud(cleanUid: string, snapshot: PromptLimitsSnapshot): void {
+  if (!auth.currentUser || !cleanUid || cleanUid.startsWith("local_")) return;
   const nowIso = new Date().toISOString();
   const payload = serializeProfilePromptPayload(snapshot);
   void setDoc(
