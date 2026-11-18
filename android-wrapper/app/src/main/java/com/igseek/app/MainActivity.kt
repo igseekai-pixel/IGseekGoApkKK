@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var nativeBridge: NativeStorageBridge
 
     // Target web app URL
-    private val TARGET_URL = "https://chats-igseek-2026.ai.studio"
+    private val TARGET_URL = "https://really-igseek-2026.ai.studio"
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureSettings(settings: WebSettings) {
