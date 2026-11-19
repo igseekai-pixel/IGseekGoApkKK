@@ -2301,10 +2301,15 @@ export function FlowView({
                                   const a = document.createElement("a");
                                   a.href = url;
                                   a.download = art.name || "artifact.txt";
+                                  a.rel = "noopener";
+                                  a.style.position = "fixed";
+                                  a.style.left = "-10000px";
                                   document.body.appendChild(a);
                                   a.click();
-                                  document.body.removeChild(a);
-                                  URL.revokeObjectURL(url);
+                                  window.setTimeout(() => {
+                                    a.remove();
+                                    URL.revokeObjectURL(url);
+                                  }, 1500);
                                   toast.success(`${t("File downloaded:")} ${art.name}`);
                                 }
                               }}

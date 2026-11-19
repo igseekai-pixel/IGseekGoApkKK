@@ -1,6 +1,5 @@
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
-import { isEmbeddedWebView } from './firebase-service';
 import { getCachedCalendarToken } from './google-calendar';
 
 export interface GoogleTask {
@@ -44,11 +43,6 @@ export function setCachedTasksToken(token: string | null): void {
 }
 
 export async function connectGoogleTasks(): Promise<{ accessToken: string; userEmail?: string } | null> {
-  if (isEmbeddedWebView()) {
-    const err = new Error('Google sign-in is blocked inside the APK WebView.') as Error & { code: string };
-    err.code = 'auth/webview-google-blocked';
-    throw err;
-  }
   try {
     const tasksScopes = [
       'https://www.googleapis.com/auth/tasks',

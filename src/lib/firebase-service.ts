@@ -1247,7 +1247,7 @@ export function formatAuthError(err: unknown, lang: string = 'en'): string {
     },
   };
 
-  if (message.includes('missing initial state') || message.includes('sessionStorage')) {
+  if (message.includes('disallowed_useragent') || message.includes('missing initial state') || message.includes('sessionStorage')) {
     return authTranslations['webview-google-blocked'][l];
   }
 
@@ -1661,13 +1661,6 @@ export const firebaseClient = {
     },
 
     async signInWithGoogle() {
-      if (isEmbeddedWebView()) {
-        return {
-          data: { user: null, session: null, isNewUser: false },
-          error: makeAuthError('auth/webview-google-blocked'),
-        };
-      }
-
       let resolveSetup!: () => void;
       const setupPromise = new Promise<void>((resolve) => {
         resolveSetup = resolve;

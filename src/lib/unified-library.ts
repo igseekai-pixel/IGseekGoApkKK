@@ -251,6 +251,8 @@ export async function fetchUnifiedLibraryItems(opts?: {
   }
   const localItems = collectLocalUnifiedLibrary({ ...opts, cloudMediaMsgs });
 
+  // Local storage is the immediate source of truth for the Library UI.
+  // Cloud synchronization is best-effort and must never undo a successful local save.
   try {
     const { data } = await firebaseClient.auth.getSession();
     const token = data.session?.access_token;
@@ -328,10 +330,12 @@ export async function addFileToUnifiedLibrary(
   }
 
   const storedContent = textContent !== undefined ? textContent : (dataUrl || "");
+  const lowerName = file.name.toLowerCase();
+  const isCodeArtifact = /\.(html?|css|js|jsx|ts|tsx|py|json|ya?ml|md|sql|sh|xml|csv|log|env)$/i.test(lowerName);
   const fileType = file.type.startsWith("image/")
     ? "image"
-    : file.name.endsWith(".json") || file.name.endsWith(".csv")
-      ? "data"
+    : isCodeArtifact
+      ? "artifact"
       : "document";
 
   const updated = upsertFlowLibraryFiles([
@@ -346,6 +350,8 @@ export async function addFileToUnifiedLibrary(
 
   const savedEntry = updated.find((u) => u.name === file.name) || updated[0];
 
+  // Local storage is the immediate source of truth for the Library UI.
+  // Cloud synchronization is best-effort and must never undo a successful local save.
   try {
     const { data } = await firebaseClient.auth.getSession();
     const token = data.session?.access_token;
@@ -360,8 +366,8 @@ export async function addFileToUnifiedLibrary(
         body: JSON.stringify({
           id: savedEntry?.id,
           name: file.name,
-          type: file.type.startsWith("image/") ? "image" : fileType === "data" ? "artifact" : "doc",
-          mimeType: file.type || guessMimeType(file.name),
+          type: file.type.startsWith("image/") ? "image" : fileType === "artifact" ? "artifact" : "doc",
+          mimeType: guessMimeType(file.name, file.type || "text/plain"),
           ...(textContent !== undefined ? { content: textContent.slice(0, 800_000) } : {}),
           ...(dataUrl && dataUrl.length <= 1_100_000 ? { dataUrl } : {}),
           size: file.size,
@@ -387,12 +393,18 @@ export async function addFileToUnifiedLibrary(
   } catch {
   }
 
+  try {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("igseek:library-updated"));
+    }
+  } catch {}
+
   return {
     id: savedEntry?.id || `lib_${Date.now()}`,
     flowFileId: savedEntry?.id,
     name: file.name,
-    type: file.type.startsWith("image/") ? "image" : fileType === "data" ? "artifact" : "doc",
-    mimeType: file.type || guessMimeType(file.name),
+    type: file.type.startsWith("image/") ? "image" : fileType === "artifact" ? "artifact" : "doc",
+    mimeType: guessMimeType(file.name, file.type || "text/plain"),
     ...(textContent !== undefined ? { content: textContent } : {}),
     ...(dataUrl ? { dataUrl } : {}),
     chatId: "",

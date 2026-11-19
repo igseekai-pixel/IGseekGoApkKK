@@ -1,6 +1,5 @@
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
-import { isEmbeddedWebView } from './firebase-service';
 
 export interface CalendarReminderOverride {
   method: 'popup' | 'email';
@@ -71,11 +70,6 @@ export function setCachedCalendarToken(token: string | null): void {
 }
 
 export async function connectGoogleCalendar(): Promise<{ accessToken: string; userEmail?: string } | null> {
-  if (isEmbeddedWebView()) {
-    const err = new Error('Google sign-in is blocked inside the APK WebView.') as Error & { code: string };
-    err.code = 'auth/webview-google-blocked';
-    throw err;
-  }
   try {
     const calendarScopes = [
       'https://www.googleapis.com/auth/calendar',

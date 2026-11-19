@@ -125,16 +125,24 @@ const DICT: Record<string, Dict> = {
   "Content": { ru: "Контент", es: "Contenido", fr: "Contenu", ar: "المحتوى" },
 
   "Ask IGseek anything…": {
-    ru: "Спросите IGseek о чём угодно…",
-    es: "Pregunta lo que quieras a IGseek…",
-    fr: "Demandez ce que vous voulez à IGseek…",
-    ar: "اسأل IGseek عن أي شيء…",
+    ru: "Напишите сообщение или задачу…",
+    en: "Type a message or task…",
+    es: "Escribe un mensaje o tarea…",
+    fr: "Écrivez un message ou une tâche…",
+    ar: "اكتب رسالة أو مهمة…",
+  },
+  "Напишите сообщение или задачу…": {
+    ru: "Напишите сообщение или задачу…",
+    en: "Type a message or task…",
+    es: "Escribe un mensaje o tarea…",
+    fr: "Écrivez un message ou une tâche…",
+    ar: "اكتب رسالة أو مهمة…",
   },
   "Ask IGseek about a profile, trend, hashtag…": {
-    ru: "Спросите IGseek о профиле, тренде, хэштеге…",
-    es: "Pregunta a IGseek sobre un perfil, tendencia, hashtag…",
-    fr: "Demandez à IGseek à propos d'un profil, tendance, hashtag…",
-    ar: "اسأل IGseek عن ملف، اتجاه، وسم…",
+    ru: "Спросите о профиле, тренде, хэштеге…",
+    es: "Pregunta sobre un perfil, tendencia, hashtag…",
+    fr: "Demandez à propos d'un profil, tendance, hashtag…",
+    ar: "اسأل عن ملف، اتجاه، وسم…",
   },
   "Sign in to start chatting with IGseek…": {
     ru: "Войдите, чтобы общаться с IGseek…",

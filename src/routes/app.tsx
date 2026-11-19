@@ -1020,6 +1020,7 @@ function Index() {
         toast.error(t("File is too large") + " (max 200MB)");
         continue;
       }
+      void addFileToUnifiedLibrary(file, { taskTitle: file.name }).catch(() => {});
       const ext = (file.name.split(".").pop() || "").toLowerCase();
       const sizeLabel = formatFileSize(file.size);
       if (file.type.startsWith("image/") || IMG_EXT.has(ext)) {
@@ -1402,6 +1403,33 @@ function Index() {
                   const art = JSON.parse(raw) as Artifact;
                   currentAssistantMsg.artifacts = [...(currentAssistantMsg.artifacts ?? []), art];
                   updateLiveUi();
+                  // Persist immediately so chat artifacts are available in Library even
+                  // if the user navigates away before the background sync finishes.
+                  const extMapForLibrary: Record<string, string> = {
+                    html: "html", css: "css", javascript: "js", js: "js",
+                    typescript: "ts", ts: "ts", tsx: "tsx", jsx: "jsx",
+                    python: "py", py: "py", json: "json", yaml: "yml",
+                    yml: "yml", markdown: "md", md: "md", sql: "sql",
+                    bash: "sh", sh: "sh", text: "txt", txt: "txt",
+                  };
+                  const artifactExt = extMapForLibrary[art.language?.toLowerCase()] || "txt";
+                  const artifactName = `${(art.title || "artifact").replace(/\\.(?:html?|css|js|jsx|ts|tsx|py|json|ya?ml|md|sql|sh|txt)$/i, "")}.${artifactExt}`;
+                  upsertFlowLibraryFiles([{
+                    name: artifactName,
+                    type: "artifact",
+                    content: art.content || "",
+                    projectId: null,
+                    taskTitle: art.title || "Artifact",
+                  }]);
+                  try {
+                    const extMap: Record<string, string> = {
+                      html: "html", css: "css", javascript: "js", typescript: "ts",
+                      tsx: "tsx", jsx: "jsx", python: "py", json: "json", markdown: "md", text: "txt"
+                    };
+                    const ext = extMap[art.language?.toLowerCase()] || "txt";
+                    const artFile = new File([art.content], `${art.title || "artifact"}.${ext}`, { type: "text/plain;charset=utf-8" });
+                    void addFileToUnifiedLibrary(artFile, { taskTitle: art.title || "Artifact" }).catch(() => {});
+                  } catch {}
                 } catch {  }
               } else if (currentEvent === "image_start") {
                 try {
@@ -2395,7 +2423,7 @@ function Index() {
               /></TabWrap>}
 
               {tab === "engine" && (
-                <TabWrap key="engine">
+                <TabWrap key="engine" className="h-full min-h-0 flex flex-col flex-1">
                   <EngineView
                     cloudUid={!isGuest && user && user.id !== GUEST_ID ? user.id : null}
                     usageUid={usageUid}
@@ -2533,62 +2561,8 @@ function Index() {
                   if (isSending) return;
                   sendChat(input);
                 }}
-                className="relative flex items-end gap-1 sm:gap-1.5 rounded-[26px] border border-zinc-200 dark:border-white/10 bg-white/95 dark:bg-[#141416]/95 p-1 pl-2 sm:p-1.5 sm:pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-colors w-full"
+                className="igseek-chat-composer relative flex flex-col rounded-3xl border border-border/80 bg-surface/90 dark:bg-[#161619]/95 shadow-xl shadow-black/5 dark:shadow-2xl backdrop-blur-2xl focus-within:border-[var(--brand)] focus-within:ring-2 focus-within:ring-[var(--brand-soft)] transition-all w-full min-w-0 overflow-hidden"
               >
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isAuthed) { setAuthOpen(true); return; }
-                    if (isLocked) { setProfileOpen(true); return; }
-                    fileInputRef.current?.click();
-                  }}
-                  title={t("Attach file")}
-                  className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isAuthed) { setAuthOpen(true); return; }
-                    if (isLocked) { setProfileOpen(true); return; }
-                    openLibraryPicker((item) => {
-                      const resolvedUrl = item.resolvedDataUrl || toBase64DataUrlFromItem(item) || item.dataUrl || "";
-                      const isImg = item.type === "image";
-                      const approxBytes = item.content ? item.content.length : Math.round((resolvedUrl.length * 3) / 4);
-                      setAttachments((prev) =>
-                        prev.length >= 8
-                          ? prev
-                          : [
-                              ...prev,
-                              {
-                                id: crypto.randomUUID(),
-                                kind: isImg ? "image" : "file",
-                                name: item.name,
-                                mimeType: item.mimeType || (isImg ? "image/png" : "text/plain"),
-                                sizeLabel: formatFileSize(Math.max(1024, approxBytes)),
-                                dataUrl: resolvedUrl,
-                                ...(!isImg
-                                  ? {
-                                      parsedContent: item.content
-                                        ? `📄 **${item.name}** (из Library):\n\n${item.content.slice(0, 80000)}`
-                                        : `📎 **${item.name}** (из Library)`,
-                                    }
-                                  : {}),
-                              },
-                            ],
-                      );
-                      toast.success(`${t("Attached from Library:")} ${item.name}`);
-                    });
-                  }}
-                  title={t("Select from Library")}
-                  className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors cursor-pointer"
-                >
-                  <BookOpen className="h-4 w-4" />
-                </button>
-
                 <textarea
                   ref={composerRef}
                   value={input}
@@ -2610,98 +2584,155 @@ function Index() {
                   readOnly={!isAuthed || isLocked}
                   placeholder={
                     !isAuthed
-                      ? t("Sign in to start chatting with IGseek…")
-                      : t("Ask IGseek anything…")
+                      ? t("Sign in to start chatting…")
+                      : t("Напишите сообщение или задачу…")
                   }
-                  className="min-h-[32px] sm:min-h-[36px] flex-1 min-w-0 resize-none overflow-hidden bg-transparent px-1.5 py-1.5 sm:py-2 text-[13.5px] sm:text-[15px] leading-5 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
+                  className="w-full min-w-0 min-h-[44px] max-h-[220px] resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-6 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
                 />
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isAuthed) { setAuthOpen(true); return; }
-                    if (isLocked) { setProfileOpen(true); return; }
-                    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                    if (!SR) { toast.error(t("Voice input is not supported in this browser")); return; }
-                    if (listening) {
-                      try { recognitionRef.current?.stop(); } catch {}
-                      setListening(false);
-                      return;
-                    }
-                    const rec = new SR();
-                    rec.lang = localeFor(lang);
-                    rec.continuous = true;
-                    rec.interimResults = true;
-                    let base = input;
-                    rec.onresult = (ev: any) => {
-                      let finalTxt = "";
-                      let interim = "";
-                      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-                        const r = ev.results[i];
-                        if (r.isFinal) finalTxt += r[0].transcript;
-                        else interim += r[0].transcript;
-                      }
-                      if (finalTxt) {
-                        base = (base ? base + " " : "") + finalTxt.trim();
-                        setInput(base);
-                      } else if (interim) {
-                        setInput((base ? base + " " : "") + interim);
-                      }
-                    };
-                    rec.onerror = () => setListening(false);
-                    rec.onend = () => setListening(false);
-                    recognitionRef.current = rec;
-                    try { rec.start(); setListening(true); } catch { setListening(false); }
-                  }}
-                  title={listening ? t("Stop recording") : t("Voice input")}
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-200 dark:border-white/5 bg-zinc-100 hover:bg-zinc-200 dark:bg-[#1e1e22] dark:hover:bg-[#28282e] transition-all ${
-                    listening
-                      ? "text-black dark:text-[var(--brand)] animate-pulse ring-2 ring-black/20 dark:ring-[var(--brand-border)]"
-                      : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
-                  }`}
-                >
-                  {listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => { if (!isAuthed) { setAuthOpen(true); return; } setThinking((v) => !v); }}
-                  title={thinking ? t("Reasoner on") : t("Reasoner off")}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-200 dark:border-white/5 bg-zinc-100 hover:bg-zinc-200 dark:bg-[#1e1e22] dark:hover:bg-[#28282e] transition-all"
-                >
-                  <Brain className={`h-3.5 w-3.5 ${thinking ? "text-black dark:text-[var(--brand)] font-bold" : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"}`} />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => { if (!isAuthed) { setAuthOpen(true); return; } setWebSearch((v) => !v); }}
-                  title={webSearch ? t("Web search on") : t("Web search off")}
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-200 dark:border-white/5 bg-zinc-100 hover:bg-zinc-200 dark:bg-[#1e1e22] dark:hover:bg-[#28282e] transition-all ${
-                    webSearch ? "text-black dark:text-[var(--brand)]" : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
-                  }`}
-                >
-                  <Globe className="h-3.5 w-3.5" />
-                </button>
-
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {isSending && (
+                <div className="flex items-center justify-between px-3 pb-2.5 pt-1 border-t border-border/40">
+                  <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar py-0.5">
                     <button
                       type="button"
-                      onClick={stopStreaming}
-                      title={t("Stop generation")}
-                      className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                      onClick={() => {
+                        if (!isAuthed) { setAuthOpen(true); return; }
+                        if (isLocked) { setProfileOpen(true); return; }
+                        fileInputRef.current?.click();
+                      }}
+                      title={t("Attach file")}
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors"
                     >
-                      <Square className="h-3 w-3" fill="currentColor" />
+                      <Paperclip className="h-4 w-4" />
                     </button>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={attachments.some((a) => a.parsing) || (isAuthed && !input.trim() && !attachments.length)}
-                    title={isAuthed ? (isSending ? t("Send to queue") : t("Send")) : t("Sign in to send")}
-                    className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md shadow-black/20 dark:shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!isAuthed) { setAuthOpen(true); return; }
+                        if (isLocked) { setProfileOpen(true); return; }
+                        openLibraryPicker((item) => {
+                          const resolvedUrl = item.resolvedDataUrl || toBase64DataUrlFromItem(item) || item.dataUrl || "";
+                          const isImg = item.type === "image";
+                          const approxBytes = item.content ? item.content.length : Math.round((resolvedUrl.length * 3) / 4);
+                          setAttachments((prev) =>
+                            prev.length >= 8
+                              ? prev
+                              : [
+                                  ...prev,
+                                  {
+                                    id: crypto.randomUUID(),
+                                    kind: isImg ? "image" : "file",
+                                    name: item.name,
+                                    mimeType: item.mimeType || (isImg ? "image/png" : "text/plain"),
+                                    sizeLabel: formatFileSize(Math.max(1024, approxBytes)),
+                                    dataUrl: resolvedUrl,
+                                    ...(!isImg
+                                      ? {
+                                          parsedContent: item.content
+                                            ? `📄 **${item.name}** (из Library):\n\n${item.content.slice(0, 80000)}`
+                                            : `📎 **${item.name}** (из Library)`,
+                                        }
+                                      : {}),
+                                  },
+                                ],
+                          );
+                          toast.success(`${t("Attached from Library:")} ${item.name}`);
+                        });
+                      }}
+                      title={t("Select from Library")}
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors cursor-pointer"
+                    >
+                      <BookOpen className="h-4 w-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!isAuthed) { setAuthOpen(true); return; }
+                        if (isLocked) { setProfileOpen(true); return; }
+                        const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                        if (!SR) { toast.error(t("Voice input is not supported in this browser")); return; }
+                        if (listening) {
+                          try { recognitionRef.current?.stop(); } catch {}
+                          setListening(false);
+                          return;
+                        }
+                        const rec = new SR();
+                        rec.lang = localeFor(lang);
+                        rec.continuous = true;
+                        rec.interimResults = true;
+                        let base = input;
+                        rec.onresult = (ev: any) => {
+                          let finalTxt = "";
+                          let interim = "";
+                          for (let i = ev.resultIndex; i < ev.results.length; i++) {
+                            const r = ev.results[i];
+                            if (r.isFinal) finalTxt += r[0].transcript;
+                            else interim += r[0].transcript;
+                          }
+                          if (finalTxt) {
+                            base = (base ? base + " " : "") + finalTxt.trim();
+                            setInput(base);
+                          } else if (interim) {
+                            setInput((base ? base + " " : "") + interim);
+                          }
+                        };
+                        rec.onerror = () => setListening(false);
+                        rec.onend = () => setListening(false);
+                        recognitionRef.current = rec;
+                        try { rec.start(); setListening(true); } catch { setListening(false); }
+                      }}
+                      title={listening ? t("Stop recording") : t("Voice input")}
+                      className={`flex h-8 w-8 items-center justify-center rounded-full border border-zinc-200 dark:border-white/5 bg-zinc-100 hover:bg-zinc-200 dark:bg-[#1e1e22] dark:hover:bg-[#28282e] transition-all ${
+                        listening
+                          ? "text-black dark:text-[var(--brand)] animate-pulse ring-2 ring-black/20 dark:ring-[var(--brand-border)]"
+                          : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
+                      }`}
+                    >
+                      {listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { if (!isAuthed) { setAuthOpen(true); return; } setThinking((v) => !v); }}
+                      title={thinking ? t("Reasoner on") : t("Reasoner off")}
+                      className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-200 dark:border-white/5 bg-zinc-100 hover:bg-zinc-200 dark:bg-[#1e1e22] dark:hover:bg-[#28282e] transition-all"
+                    >
+                      <Brain className={`h-3.5 w-3.5 ${thinking ? "text-black dark:text-[var(--brand)] font-bold" : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"}`} />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { if (!isAuthed) { setAuthOpen(true); return; } setWebSearch((v) => !v); }}
+                      title={webSearch ? t("Web search on") : t("Web search off")}
+                      className={`flex h-8 w-8 items-center justify-center rounded-full border border-zinc-200 dark:border-white/5 bg-zinc-100 hover:bg-zinc-200 dark:bg-[#1e1e22] dark:hover:bg-[#28282e] transition-all ${
+                        webSearch ? "text-black dark:text-[var(--brand)]" : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
+                      }`}
+                    >
+                      <Globe className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isSending && (
+                      <button
+                        type="button"
+                        onClick={stopStreaming}
+                        title={t("Stop generation")}
+                        className="flex h-8 w-8 items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                      >
+                        <Square className="h-3 w-3" fill="currentColor" />
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={attachments.some((a) => a.parsing) || (isAuthed && !input.trim() && !attachments.length)}
+                      title={isAuthed ? (isSending ? t("Send to queue") : t("Send")) : t("Sign in to send")}
+                      className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md shadow-black/20 dark:shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>
@@ -2883,13 +2914,14 @@ function ComposerAttachmentsTray({
   );
 }
 
-function TabWrap({ children }: { children: React.ReactNode }) {
+function TabWrap({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -6 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+      className={className}
     >
       {children}
     </motion.div>
@@ -3122,26 +3154,8 @@ function ChatView({
           )}
           <form
             onSubmit={(e) => { e.preventDefault(); submit(input); }}
-            className="flex w-full items-end gap-2 rounded-[28px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-colors"
+            className="igseek-chat-composer flex flex-col w-full min-w-0 rounded-3xl border border-border/80 bg-surface/90 dark:bg-[#161619]/95 shadow-2xl shadow-black/10 dark:shadow-2xl backdrop-blur-2xl focus-within:border-[var(--brand)] focus-within:ring-2 focus-within:ring-[var(--brand-soft)] transition-all overflow-hidden"
           >
-            <button
-              type="button"
-              onClick={() => { if (guard()) onAttach(); }}
-              title={t("Attach file")}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors"
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
-            {onOpenLibraryPicker && (
-              <button
-                type="button"
-                onClick={() => { if (guard()) onOpenLibraryPicker(); }}
-                title={t("Select from Library")}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors cursor-pointer"
-              >
-                <BookOpen className="h-4 w-4" />
-              </button>
-            )}
             <textarea
               ref={heroComposerRef}
               value={input}
@@ -3159,28 +3173,50 @@ function ChatView({
               }}
               rows={1}
               readOnly={!isAuthed || isLocked}
-              placeholder={t("Ask IGseek anything…")}
-              className="flex-1 min-h-[36px] min-w-0 resize-none overflow-hidden bg-transparent px-2 py-1.5 text-[15px] leading-6 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none text-left"
+              placeholder={t("Напишите сообщение или задачу…")}
+              className="w-full min-w-0 min-h-[44px] max-h-[220px] resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-6 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none text-left"
             />
-            <div className="flex items-center gap-1.5 shrink-0">
-              {isSending && onStop && (
+            <div className="flex items-center justify-between px-3 pb-2.5 pt-1 border-t border-border/40">
+              <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar py-0.5">
                 <button
                   type="button"
-                  onClick={onStop}
-                  title={t("Stop generation")}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                  onClick={() => { if (guard()) onAttach(); }}
+                  title={t("Attach file")}
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors"
                 >
-                  <Square className="h-3 w-3" fill="currentColor" />
+                  <Paperclip className="h-4 w-4" />
                 </button>
-              )}
-              <button
-                type="submit"
-                disabled={attachments.some((a) => a.parsing) || (!input.trim() && !attachments.length)}
-                title={isSending ? t("Send to queue") : t("Send")}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md shadow-black/20 dark:shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-              >
-                <ArrowUp className="h-4 w-4" />
-              </button>
+                {onOpenLibraryPicker && (
+                  <button
+                    type="button"
+                    onClick={() => { if (guard()) onOpenLibraryPicker(); }}
+                    title={t("Select from Library")}
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors cursor-pointer"
+                  >
+                    <BookOpen className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {isSending && onStop && (
+                  <button
+                    type="button"
+                    onClick={onStop}
+                    title={t("Stop generation")}
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-red-600 hover:bg-red-700 text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                  >
+                    <Square className="h-3 w-3" fill="currentColor" />
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={attachments.some((a) => a.parsing) || (!input.trim() && !attachments.length)}
+                  title={isSending ? t("Send to queue") : t("Send")}
+                  className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md shadow-black/20 dark:shadow-[var(--brand-shadow)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </form>
         </div>
@@ -3404,6 +3440,33 @@ const EngineMarkdown = memo(function EngineMarkdown({ content }: { content: stri
   return <ReactMarkdown remarkPlugins={ENGINE_REMARK_PLUGINS}>{content}</ReactMarkdown>;
 });
 
+async function downloadBrowserFile(name: string, source: string | undefined, content?: string): Promise<void> {
+  let blob: Blob;
+  if (typeof content === "string") {
+    blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  } else if (source) {
+    const response = await fetch(source);
+    if (!response.ok) throw new Error(`Download failed (HTTP ${response.status})`);
+    blob = await response.blob();
+  } else {
+    throw new Error("File content is unavailable");
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = name || "download";
+  anchor.rel = "noopener";
+  anchor.style.position = "fixed";
+  anchor.style.left = "-10000px";
+  document.body.appendChild(anchor);
+  anchor.click();
+  window.setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }, 1500);
+}
+
 function ArtifactCard({ artifact }: { artifact: Artifact }) {
   const t = useT();
   const extFor = (lang: string) => {
@@ -3421,17 +3484,26 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
     .replace(/[^a-z0-9\u0400-\u04ff]+/gi, "-")
     .replace(/^-+|-+$/g, "") || "artifact";
   const filename = `${slug}.${extFor(artifact.language)}`;
-  const download = () => {
-    const blob = new Blob([artifact.content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+
+  const download = async () => {
+    try {
+      await downloadBrowserFile(filename, undefined, artifact.content || "");
+      toast.success(`${t("File downloaded:")} ${filename}`);
+    } catch (e: any) {
+      toast.error(e?.message || t("Download failed"));
+    }
   };
+
+  const saveToLibrary = async () => {
+    try {
+      const file = new File([artifact.content], filename, { type: "text/plain;charset=utf-8" });
+      await addFileToUnifiedLibrary(file, { taskTitle: artifact.title });
+      toast.success(`${t("Saved to Library:")} ${artifact.title}`);
+    } catch (e: any) {
+      toast.error(e?.message || t("Failed to save to Library"));
+    }
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 6, scale: 0.98 }}
@@ -3461,14 +3533,26 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
           {t("Code")} · {artifact.language.toUpperCase()}
         </div>
       </div>
-      <button
-        type="button"
-        onClick={download}
-        className="glass-button relative inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium text-foreground hover:border-brand/40 hover:text-brand"
-      >
-        <Download className="h-3.5 w-3.5" />
-        {t("Download")}
-      </button>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          onClick={() => void saveToLibrary()}
+          title={t("Save to Library")}
+          className="glass-button inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-foreground hover:border-brand/40 hover:text-brand cursor-pointer"
+        >
+          <BookOpen className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">{t("Library")}</span>
+        </button>
+        <button
+          type="button"
+          onClick={download}
+          title={t("Download")}
+          className="glass-button inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-foreground hover:border-brand/40 hover:text-brand cursor-pointer"
+        >
+          <Download className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">{t("Download")}</span>
+        </button>
+      </div>
     </motion.div>
   );
 }
@@ -5249,14 +5333,13 @@ function LibraryView({
     });
   }, [allLibraryFiles, fileQuery, fileCategory]);
 
-  const handleDownload = (file: typeof allLibraryFiles[0]) => {
-    const link = document.createElement("a");
-    link.href = file.dataUrl || file.url || "#";
-    link.download = file.name || "attachment";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success(`${t("Downloading file:")} ${file.name}`);
+  const handleDownload = async (file: typeof allLibraryFiles[0]) => {
+    try {
+      await downloadBrowserFile(file.name || "attachment", file.dataUrl || file.url, file.content);
+      toast.success(`${t("File downloaded:")} ${file.name}`);
+    } catch (e: any) {
+      toast.error(e?.message || t("Download failed"));
+    }
   };
 
   const handleRename = async (file: typeof allLibraryFiles[0]) => {
@@ -6990,7 +7073,7 @@ Engine Studio automatically parses these blocks and writes files directly into t
   };
 
   return (
-    <div className="space-y-4 max-w-5xl mx-auto px-2">
+    <div className="flex flex-col flex-1 h-full min-h-0 max-w-5xl mx-auto px-1 sm:px-2 w-full">
       <AnimatePresence>
         {deployModalOpen && (
           <DeployVercelModal
@@ -7067,7 +7150,7 @@ Engine Studio automatically parses these blocks and writes files directly into t
                 e.preventDefault();
                 void generateWithAI();
               }}
-              className="relative flex flex-col gap-3 rounded-[24px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-4 shadow-xl backdrop-blur-xl transition-colors focus-within:border-zinc-400 dark:focus-within:border-white/20"
+              className="igseek-chat-composer relative flex flex-col gap-3 rounded-[24px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-4 shadow-xl backdrop-blur-xl transition-colors focus-within:border-zinc-400 dark:focus-within:border-white/20 min-w-0 w-full"
             >
               <textarea
                 ref={engineStartComposerRef}
@@ -7094,8 +7177,8 @@ Engine Studio automatically parses these blocks and writes files directly into t
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-100 dark:border-white/5">
-                <div className="flex items-center gap-2">
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-100 dark:border-white/5 min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 overflow-x-auto no-scrollbar py-0.5">
                   <button
                     type="button"
                     onClick={() => {
@@ -7206,7 +7289,7 @@ Engine Studio automatically parses these blocks and writes files directly into t
                   </button>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0 ml-auto">
                   <span
                     className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-mono font-semibold ${
                       engineExhausted
@@ -7285,8 +7368,8 @@ Engine Studio automatically parses these blocks and writes files directly into t
           </div>
         </div>
       ) : (
-        <div className="flex flex-col h-[calc(100vh-100px)] md:h-[calc(100vh-110px)] max-w-5xl mx-auto w-full space-y-3 overflow-hidden">
-          <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 dark:border-white/10 pb-3">
+        <div className="flex flex-col flex-1 h-full min-h-0 max-w-5xl mx-auto w-full gap-2 sm:gap-3 overflow-hidden pb-1">
+          <div className="shrink-0 flex items-center justify-between gap-2 border-b border-zinc-200 dark:border-white/10 pb-2 overflow-x-auto no-scrollbar">
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -7440,30 +7523,8 @@ Engine Studio automatically parses these blocks and writes files directly into t
                   e.preventDefault();
                   void generateWithAI();
                 }}
-                className="shrink-0 relative flex items-end gap-2 rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 shadow-lg backdrop-blur-xl"
+                className="igseek-chat-composer shrink-0 relative flex flex-col rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 shadow-lg backdrop-blur-xl overflow-hidden min-w-0 w-full"
               >
-                {onOpenLibraryPicker && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onOpenLibraryPicker((item) => {
-                        if (item.content) {
-                          setFiles((prev) => ({ ...prev, [item.name]: item.content! }));
-                        }
-                        setPrompt((prev) =>
-                          `${prev ? `${prev}\n` : ""}[${t("File from Library")}: ${item.name}]${
-                            item.content ? `\n\`\`\`\n${item.content.slice(0, 6000)}\n\`\`\`` : ""
-                          }`,
-                        );
-                        toast.success(`${t("Imported from Library:")} ${item.name}`);
-                      })
-                    }
-                    title={t("Select from Library")}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white transition-colors cursor-pointer"
-                  >
-                    <BookOpen className="h-3.5 w-3.5" />
-                  </button>
-                )}
                 <textarea
                   ref={engineActiveComposerRef}
                   value={prompt}
@@ -7477,37 +7538,67 @@ Engine Studio automatically parses these blocks and writes files directly into t
                   }}
                   rows={1}
                   placeholder={t("Describe project changes or improvements…")}
-                  className="flex-1 min-h-[32px] min-w-0 resize-none overflow-hidden bg-transparent px-3 py-1.5 text-sm leading-5 text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none"
+                  className="w-full min-h-[42px] max-h-[180px] resize-none bg-transparent px-3 pt-3 pb-1.5 text-sm leading-5 text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none"
                 />
-                <span
-                  className={`mb-1.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold shrink-0 ${
-                    engineExhausted
-                      ? "border-red-500/40 bg-red-500/10 text-red-500"
-                      : "border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-muted-foreground"
-                  }`}
-                  title={t("Prompts used")}
-                >
-                  {engineUsed}/{engineLimit}
-                </span>
-                {isGenerating ? (
-                  <button
-                    type="button"
-                    onClick={stopGenerating}
-                    title={t("Stop")}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md active:scale-95 cursor-pointer"
-                  >
-                    <Square className="h-3 w-3" fill="currentColor" />
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={!prompt.trim()}
-                    title={t("Send")}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white disabled:opacity-30 disabled:cursor-not-allowed active:scale-95 cursor-pointer"
-                  >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                  </button>
-                )}
+
+                <div className="flex items-center justify-between px-3 pb-2 pt-1 border-t border-zinc-100 dark:border-white/5 gap-2 min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto no-scrollbar py-0.5">
+                    {onOpenLibraryPicker && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenLibraryPicker((item) => {
+                            if (item.content) {
+                              setFiles((prev) => ({ ...prev, [item.name]: item.content! }));
+                            }
+                            setPrompt((prev) =>
+                              `${prev ? `${prev}\n` : ""}[${t("File from Library")}: ${item.name}]${
+                                item.content ? `\n\`\`\`\n${item.content.slice(0, 6000)}\n\`\`\`` : ""
+                              }`,
+                            );
+                            toast.success(`${t("Imported from Library:")} ${item.name}`);
+                          })
+                        }
+                        title={t("Select from Library")}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white transition-colors cursor-pointer"
+                      >
+                        <BookOpen className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 ml-auto">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold ${
+                        engineExhausted
+                          ? "border-red-500/40 bg-red-500/10 text-red-500"
+                          : "border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-muted-foreground"
+                      }`}
+                      title={t("Prompts used")}
+                    >
+                      {engineUsed}/{engineLimit}
+                    </span>
+                    {isGenerating ? (
+                      <button
+                        type="button"
+                        onClick={stopGenerating}
+                        title={t("Stop")}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                      >
+                        <Square className="h-3 w-3" fill="currentColor" />
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={!prompt.trim()}
+                        title={t("Send")}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 text-white disabled:opacity-30 disabled:cursor-not-allowed active:scale-95 cursor-pointer"
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
               </form>
             </div>
           )}

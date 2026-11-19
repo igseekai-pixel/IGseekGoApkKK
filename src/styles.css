@@ -509,3 +509,60 @@
   -ms-overflow-style: none !important;
   scrollbar-width: none !important;
 }
+
+
+/* Mobile composer: keep tool controls and the send action inside the available width. */
+.igseek-chat-composer {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+}
+
+.igseek-chat-composer > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.igseek-chat-composer > div:last-child > div:first-child {
+  flex: 1 1 0%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.igseek-chat-composer > div:last-child > div:last-child {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-left: auto;
+}
+
+.igseek-chat-composer button {
+  flex-shrink: 0;
+  touch-action: manipulation;
+}
+
+@media (max-width: 380px) {
+  .igseek-chat-composer {
+    border-radius: 1.25rem;
+  }
+  .igseek-chat-composer > div:last-child {
+    gap: 0.375rem;
+  }
+  .igseek-chat-composer > div:last-child > div:first-child {
+    gap: 0.125rem;
+  }
+}
+
+@media (max-height: 500px) and (orientation: landscape) {
+  .igseek-chat-composer textarea {
+    max-height: 5.5rem;
+  }
+}

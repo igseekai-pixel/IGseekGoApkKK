@@ -41,7 +41,7 @@ export function AuthCard({
   const [mode, setMode] = useState<"signin" | "signup">(defaultMode);
   const [signupStep, setSignupStep] = useState<"credentials" | "accent">("credentials");
   const [selectedAccent, setSelectedAccent] = useState<AccentId | null>(null);
-  const [showEmailForm, setShowEmailForm] = useState<boolean>(() => isEmbeddedWebView());
+  const [showEmailForm, setShowEmailForm] = useState<boolean>(false);
   const [isForgot, setIsForgot] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -63,7 +63,6 @@ export function AuthCard({
   useEffect(() => {
     if (isEmbeddedWebView()) {
       setIsApkWebView(true);
-      setShowEmailForm(true);
     }
   }, []);
 
@@ -89,9 +88,6 @@ export function AuthCard({
       }
       onSuccess?.();
     } catch (err: any) {
-      if (err?.code === "auth/webview-google-blocked" || isEmbeddedWebView()) {
-        setShowEmailForm(true);
-      }
       setError(formatAuthError(err, lang));
     } finally {
       setLoading(null);
@@ -259,7 +255,7 @@ export function AuthCard({
           onClick={() => {
             setMode("signin");
             setSignupStep("credentials");
-            setShowEmailForm(isApkWebView);
+            setShowEmailForm(false);
             setIsForgot(false);
             setConsentAttempted(false);
             setError(null);
@@ -321,7 +317,7 @@ export function AuthCard({
         </AnimatePresence>
       </div>
 
-      {!isApkWebView && !showEmailForm && mode === "signin" && !isForgot ? (
+      {!showEmailForm && mode === "signin" && !isForgot ? (
         <div className="w-full flex flex-col gap-3">
           <button
             type="button"
@@ -462,35 +458,27 @@ export function AuthCard({
         </form>
       ) : (
         <form onSubmit={handleFormSubmit} className="w-full flex flex-col gap-3 text-left">
-          {(!isApkWebView || isForgot) && (
-            <button
-              type="button"
-              onClick={() => {
-                if (isApkWebView && isForgot) {
-                  setIsForgot(false);
-                  setError(null);
-                  setSuccessMessage(null);
-                } else {
-                  setMode("signin");
-                  setShowEmailForm(false);
-                  setIsForgot(false);
-                  setError(null);
-                }
-              }}
-              className="self-start flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-1 transition-colors"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              <span>{isApkWebView ? t("Back") : t("All sign-in options")}</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (isForgot) {
+                setIsForgot(false);
+                setError(null);
+                setSuccessMessage(null);
+              } else {
+                setMode("signin");
+                setShowEmailForm(false);
+                setIsForgot(false);
+                setError(null);
+              }
+            }}
+            className="self-start flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-1 transition-colors"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>{isForgot ? t("Back") : t("All sign-in options")}</span>
+          </button>
 
-          {isApkWebView && !isForgot && (
-            <p className="text-xs text-muted-foreground text-center mb-1">
-              {t("Use email and password in the mobile app.")}
-            </p>
-          )}
-
-          {!isApkWebView && mode === "signup" && !isForgot && (
+          {mode === "signup" && !isForgot && (
             <>
               <button
                 type="button"

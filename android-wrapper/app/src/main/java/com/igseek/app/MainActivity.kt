@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
     private val TARGET_URL = "https://really-igseek-2026.ai.studio"
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun configureSettings(settings: WebSettings) {
+    private fun configureSettings(settings: WebSettings, isPopup: Boolean = false) {
         settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -68,8 +68,18 @@ class MainActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             javaScriptCanOpenWindowsAutomatically = true
             setSupportMultipleWindows(true)
-            if (!userAgentString.contains("IGseekAndroidApp")) {
-                userAgentString = "$userAgentString IGseekAndroidApp/1.0"
+            val cleanUa = userAgentString
+                .replace("; wv", "")
+                .replace("wv;", "")
+                .replace(Regex("""Version/\d+(?:\.\d+)?\s*"""), "")
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+            userAgentString = if (isPopup) {
+                cleanUa
+            } else if (!cleanUa.contains("IGseekAndroidApp")) {
+                "$cleanUa IGseekAndroidApp/1.0"
+            } else {
+                cleanUa
             }
         }
     }
@@ -169,7 +179,7 @@ class MainActivity : AppCompatActivity() {
                 0,
                 1f
             )
-            configureSettings(settings)
+            configureSettings(settings, isPopup = true)
             addJavascriptInterface(nativeBridge, "IGseekNativeBridge")
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
         }
@@ -228,6 +238,10 @@ class MainActivity : AppCompatActivity() {
 
         dialog.setOnDismissListener {
             try {
+                CookieManager.getInstance().flush()
+            } catch (_: Exception) {
+            }
+            try {
                 (popupWebView.parent as? ViewGroup)?.removeView(popupWebView)
                 popupWebView.destroy()
             } catch (_: Exception) {
@@ -280,7 +294,7 @@ class MainActivity : AppCompatActivity() {
         cookieManager.setAcceptCookie(true)
 
         webView = WebView(this).apply {
-            configureSettings(settings)
+            configureSettings(settings, isPopup = false)
             addJavascriptInterface(nativeBridge, "IGseekNativeBridge")
             cookieManager.setAcceptThirdPartyCookies(this, true)
 
