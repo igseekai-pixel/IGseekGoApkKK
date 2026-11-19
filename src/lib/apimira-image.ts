@@ -6,9 +6,9 @@ export type SourceImageInput = {
 const DEFAULT_APIMIRA_BASE_URL = "https://apimira.com/v1";
 const GPT_IMAGE_MODEL = "openai/gpt-image-2";
 const MAX_EDIT_FILES = 4;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // APIMIRA limit: 5 MB per input image
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_PROMPT_LENGTH = 15_000;
-const IMAGE_TIMEOUT_MS = 600_000; // APIMIRA recommends >= 600s client timeout for image edits
+const IMAGE_TIMEOUT_MS = 600_000;
 
 function getApimiraConfig(): { apiKey: string; baseUrl: string } {
   const apiKey = process.env.APIMIRA_API_KEY?.trim();
@@ -49,7 +49,6 @@ function decodeDataUrlImage(input: SourceImageInput): { buffer: Buffer; mimeType
   const buffer = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
   if (buffer.length === 0 || buffer.length > MAX_IMAGE_BYTES) return null;
 
-  // APIMIRA validates image format by magic bytes, so detect directly from bytes.
   const detected = detectImageFormat(buffer);
   if (!detected) return null;
 
@@ -67,10 +66,6 @@ type MultipartFilePart = {
   buffer: Buffer;
 };
 
-/**
- * Constructs a buffered multipart/form-data payload so we can explicitly send
- * Content-Length (required by APIMIRA /v1/images/edits; chunked uploads return 400).
- */
 function buildMultipartPayload(
   fields: Array<[string, string]>,
   files: MultipartFilePart[],
@@ -114,7 +109,6 @@ async function parseApimiraError(res: Response): Promise<string> {
       return `APIMIRA (${res.status}): ${parsed.error.message}`;
     }
   } catch {
-    // ignore JSON parse failure
   }
   return `APIMIRA (${res.status}): ${raw.slice(0, 240) || res.statusText || "Request failed"}`;
 }
@@ -143,9 +137,6 @@ async function extractDataUrlFromResponse(res: Response): Promise<string> {
   throw new Error("GPT Image 2 did not return image bytes");
 }
 
-/**
- * Generates a brand-new image from scratch using openai/gpt-image-2 via APIMIRA (/v1/images/generations).
- */
 export async function generateImageWithGptImage2(
   prompt: string,
 ): Promise<{ dataUrl: string; source: "apimira-gpt-image-2" }> {
@@ -181,9 +172,6 @@ export async function generateImageWithGptImage2(
   };
 }
 
-/**
- * Edits 1..4 user-provided or previously generated images using openai/gpt-image-2 via APIMIRA (/v1/images/edits).
- */
 export async function editImageWithGptImage2(
   prompt: string,
   sourceImages: SourceImageInput[],
@@ -203,7 +191,6 @@ export async function editImageWithGptImage2(
     throw new Error("No valid PNG/JPEG/WebP source image (<= 5 MB) found for editing");
   }
 
-  // APIMIRA docs: single image uses field "image", multiple (2..4) use "image[]"
   const fieldName = decoded.length === 1 ? "image" : "image[]";
   const files: MultipartFilePart[] = decoded.map((item, idx) => ({
     fieldName,

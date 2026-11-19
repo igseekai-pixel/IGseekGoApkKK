@@ -4,9 +4,7 @@ export type LangCode = "en" | "ru" | "es" | "fr" | "ar";
 
 type Dict = Partial<Record<LangCode, string>>;
 
-// English is the source key. Missing translations fall back to the key itself.
 const DICT: Record<string, Dict> = {
-  // Sidebar
   "AI assistant": { ru: "AI-ассистент", es: "Asistente de IA", fr: "Assistant IA", ar: "مساعد ذكي" },
   "New chat": { ru: "Новый чат", es: "Nuevo chat", fr: "Nouveau chat", ar: "محادثة جديدة" },
   "Search chats": { ru: "Поиск по чатам", es: "Buscar chats", fr: "Rechercher", ar: "بحث في المحادثات" },
@@ -83,7 +81,6 @@ const DICT: Record<string, Dict> = {
   "Free plan": { ru: "Бесплатный план", es: "Plan gratis", fr: "Offre gratuite", ar: "الخطة المجانية" },
   "Sign in": { ru: "Войти", es: "Entrar", fr: "Se connecter", ar: "تسجيل الدخول" },
 
-  // Header
   "LIVE index": { ru: "Онлайн-индекс", es: "Índice en vivo", fr: "Index en direct", ar: "المؤشر المباشر" },
   "Default": { ru: "По умолчанию", es: "Predet.", fr: "Défaut", ar: "افتراضي" },
   "Fast": { ru: "Быстрый", es: "Rápido", fr: "Rapide", ar: "سريع" },
@@ -94,7 +91,6 @@ const DICT: Record<string, Dict> = {
   "Toggle theme": { ru: "Сменить тему", es: "Cambiar tema", fr: "Basculer le thème", ar: "تبديل السمة" },
   "Select model": { ru: "Выбрать модель", es: "Seleccionar modelo", fr: "Choisir le modèle", ar: "اختيار النموذج" },
 
-  // Hero
   "What are we": { ru: "Что мы", es: "¿Qué", fr: "Que", ar: "ماذا" },
   "seeking": { ru: "ищем", es: "buscamos", fr: "cherchons", ar: "نبحث" },
   "today?": { ru: "сегодня?", es: "hoy?", fr: "aujourd'hui ?", ar: "اليوم؟" },
@@ -111,7 +107,6 @@ const DICT: Record<string, Dict> = {
     ar: "سجّل الدخول للبدء",
   },
 
-  // Suggestions
   "Analyze trends": { ru: "Анализ трендов", es: "Ver tendencias", fr: "Tendances", ar: "تحليل الرائج" },
   "Analyze trending content": { ru: "Анализ трендов", es: "Ver tendencias", fr: "Tendances", ar: "تحليل الرائج" },
   "in your niche this week": { ru: "в вашей нише за эту неделю", es: "en tu nicho esta semana", fr: "dans votre niche cette semaine", ar: "في مجالك هذا الأسبوع" },
@@ -129,7 +124,6 @@ const DICT: Record<string, Dict> = {
   "across formats and channels": { ru: "по форматам и каналам", es: "en formatos y canales", fr: "sur les formats et canaux", ar: "عبر الصيغ والقنوات" },
   "Content": { ru: "Контент", es: "Contenido", fr: "Contenu", ar: "المحتوى" },
 
-  // Composer
   "Ask IGseek anything…": {
     ru: "Спросите IGseek о чём угодно…",
     es: "Pregunta lo que quieras a IGseek…",
@@ -185,10 +179,8 @@ const DICT: Record<string, Dict> = {
     ar: "يجب تسجيل الدخول لاستخدام IGseek.",
   },
 
-  // Locked shell
   "Sign in to unlock": { ru: "Войдите, чтобы открыть", es: "Inicia sesión para desbloquear", fr: "Connectez-vous pour débloquer", ar: "سجّل الدخول لفتح" },
 
-  // Discover
   "Explore trending formats, hooks and niches — refreshed every hour from our live index.": {
     ru: "Изучайте трендовые форматы, хуки и ниши — обновляется каждый час из живого индекса.",
     es: "Explora formatos, ganchos y nichos en tendencia — actualizado cada hora.",
@@ -208,7 +200,6 @@ const DICT: Record<string, Dict> = {
   "Tech": { ru: "Тех", es: "Tech", fr: "Tech", ar: "تقنية" },
   "Travel": { ru: "Путешествия", es: "Viajes", fr: "Voyage", ar: "سفر" },
 
-  // Analytics
   "Track performance metrics and engagement patterns across your content.": {
     ru: "Следите за метриками и паттернами вовлечённости по вашему контенту.",
     es: "Sigue métricas y patrones de participación de tu contenido.",
@@ -220,7 +211,6 @@ const DICT: Record<string, Dict> = {
   "Engagement": { ru: "Вовлечённость", es: "Interacción", fr: "Engagement", ar: "التفاعل" },
   "Weekly reach": { ru: "Охват за неделю", es: "Alcance semanal", fr: "Portée hebdo", ar: "الوصول الأسبوعي" },
 
-  // Library
   "Your saved templates, scripts and frameworks — reusable across every campaign.": {
     ru: "Ваши сохранённые шаблоны, скрипты и фреймворки — для любой кампании.",
     es: "Tus plantillas, guiones y marcos guardados — reutilizables en cada campaña.",
@@ -233,7 +223,6 @@ const DICT: Record<string, Dict> = {
   "Story sequences": { ru: "Сториз-сценарии", es: "Secuencias de stories", fr: "Séquences de stories", ar: "تسلسلات القصص" },
   "items": { ru: "элементов", es: "elementos", fr: "éléments", ar: "عناصر" },
 
-  // Saved
   "Bookmarked answers, audits and ideas — always one click away.": {
     ru: "Сохранённые ответы, аудиты и идеи — всегда под рукой.",
     es: "Respuestas, auditorías e ideas guardadas — a un clic.",
@@ -242,7 +231,6 @@ const DICT: Record<string, Dict> = {
   },
   "2d ago": { ru: "2 дн. назад", es: "hace 2d", fr: "il y a 2j", ar: "قبل يومين" },
 
-  // Engine
   "Build something with IGseek…": {
     ru: "Создайте что-нибудь с IGseek…",
     es: "Construye algo con IGseek…",
@@ -317,7 +305,6 @@ const DICT: Record<string, Dict> = {
   },
   "Soon →": { ru: "Скоро →", es: "Pronto →", fr: "Bientôt →", ar: "قريبًا ←" },
 
-  // Auth modal
   "IGseek · Auth": { ru: "IGseek · Вход", es: "IGseek · Acceso", fr: "IGseek · Connexion", ar: "IGseek · دخول" },
   "Password reset": { ru: "Сброс пароля", es: "Restablecer contraseña", fr: "Réinitialiser le mot de passe", ar: "إعادة تعيين كلمة المرور" },
   "Sign in to your account": { ru: "Войдите в аккаунт", es: "Inicia sesión en tu cuenta", fr: "Connectez-vous à votre compte", ar: "سجّل الدخول إلى حسابك" },
@@ -357,7 +344,6 @@ const DICT: Record<string, Dict> = {
   },
   "Close": { ru: "Закрыть", es: "Cerrar", fr: "Fermer", ar: "إغلاق" },
 
-  // Profile
   "Subscription": { ru: "Подписка", es: "Suscripción", fr: "Abonnement", ar: "الاشتراك" },
   "Pro": { ru: "Pro", es: "Pro", fr: "Pro", ar: "Pro" },
   "Free": { ru: "Бесплатно", es: "Gratis", fr: "Gratuit", ar: "مجاني" },
@@ -410,7 +396,6 @@ const DICT: Record<string, Dict> = {
   "agent.hacker.name": { en: "Hacker", ru: "Хакер", es: "Hacker", fr: "Hacker", ar: "أمن معلومات" },
   "agent.hacker.role": { en: "Authorized cybersecurity", ru: "Разрешённая кибербезопасность", es: "Ciberseguridad autorizada", fr: "Cybersécurité autorisée", ar: "الأمن السيبراني المُصرّح" },
 
-  // Donations / Support
   "Support": { en: "Support", ru: "Поддержать", es: "Apoyar", fr: "Soutenir", ar: "دعم" },
   "Support IGseek": { en: "Support IGseek", ru: "Поддержать IGseek", es: "Apoyar a IGseek", fr: "Soutenir IGseek", ar: "ادعم IGseek" },
   "Close sidebar": { en: "Close sidebar", ru: "Скрыть сайдбар", es: "Cerrar barra lateral", fr: "Fermer la barre latérale", ar: "إغلاق الشريط الجانبي" },
@@ -425,7 +410,6 @@ const DICT: Record<string, Dict> = {
   },
   "Opening…": { en: "Opening…", ru: "Открываю…", es: "Abriendo…", fr: "Ouverture…", ar: "جارٍ الفتح…" },
 
-  // Docs tab
   "Docs": { en: "Docs", ru: "Документы", es: "Documentos", fr: "Documents", ar: "المستندات" },
   "Legal documents and support contacts.": {
     en: "Legal documents and support contacts.",
@@ -444,7 +428,6 @@ const DICT: Record<string, Dict> = {
   "Support contact": { en: "Support contact", ru: "Контакт поддержки", es: "Contacto de soporte", fr: "Contact du support", ar: "جهة اتصال الدعم" },
   "Reach out on Telegram": { en: "Reach out on Telegram", ru: "Напишите нам в Telegram", es: "Escríbenos en Telegram", fr: "Écrivez-nous sur Telegram", ar: "تواصل معنا عبر تيليجرام" },
 
-  // Signup consents
   "Continue to sign up": { en: "Continue to sign up", ru: "Продолжить регистрацию", es: "Continuar el registro", fr: "Continuer l'inscription", ar: "متابعة التسجيل" },
   "I have read and agree to the Privacy Policy": {
     en: "I have read and agree to the Privacy Policy",
@@ -494,7 +477,6 @@ const DICT: Record<string, Dict> = {
     ar: "تم إنشاء الحساب. أكد رابط البريد ثم سجّل الدخول.",
   },
 
-  // ============ Landing page ============
   "Go to chat": { en: "Go to chat", ru: "Перейти в чат", es: "Ir al chat", fr: "Aller au chat", ar: "الذهاب إلى المحادثة" },
   "Try agents": { en: "Try agents", ru: "Попробовать агентов", es: "Probar agentes", fr: "Essayer les agents", ar: "جرّب الوكلاء" },
   "Back to chat": { en: "Back to chat", ru: "Назад в чат", es: "Volver al chat", fr: "Retour au chat", ar: "العودة إلى المحادثة" },
@@ -686,7 +668,6 @@ const DICT: Record<string, Dict> = {
   "forever": { en: "forever", ru: "навсегда", es: "para siempre", fr: "pour toujours", ar: "إلى الأبد" },
   "per month": { en: "per month", ru: "в месяц", es: "al mes", fr: "par mois", ar: "شهريًا" },
 
-  // Agents (landing)
   "Universal IGseek without specialization — a base for any task.": { en: "Universal IGseek without specialization — a base for any task.", ru: "Универсальный IGseek без специализации — база для любых задач.", es: "IGseek universal sin especialización — base para cualquier tarea.", fr: "IGseek universel sans spécialisation — base pour toute tâche.", ar: "IGseek عام بدون تخصص — أساس لأي مهمة." },
   "Hardcore engineer: code, architecture, debugging, refactoring.": { en: "Hardcore engineer: code, architecture, debugging, refactoring.", ru: "Хардкорный инженер: код, архитектура, отладка, рефакторинг.", es: "Ingeniero hardcore: código, arquitectura, depuración, refactor.", fr: "Ingénieur hardcore : code, architecture, débogage, refactor.", ar: "مهندس صارم: كود، معمارية، تصحيح وإعادة هيكلة." },
   "Red-team bias: reverse, offsec, low-level and vuln analysis.": { en: "Red-team bias: reverse, offsec, low-level and vuln analysis.", ru: "Уклон в наступательную безопасность: реверс-инжиниринг, низкоуровневый анализ и поиск уязвимостей.", es: "Perfil ofensivo: ingeniería inversa, seguridad, bajo nivel y análisis de vulnerabilidades.", fr: "Orientation sécurité offensive : rétro-ingénierie, bas niveau et analyse de failles.", ar: "توجه أمني هجومي: هندسة عكسية، أمن منخفض المستوى وتحليل الثغرات." },
@@ -694,13 +675,11 @@ const DICT: Record<string, Dict> = {
   "Cold psychoanalysis and blunt situation breakdown.": { en: "Cold psychoanalysis and blunt situation breakdown.", ru: "Холодный психоанализ и прямой разбор ситуаций без сюсюканья.", es: "Psicoanálisis frío y análisis directo de situaciones.", fr: "Psychanalyse froide et analyse directe des situations.", ar: "تحليل نفسي بارد وتفكيك مباشر للمواقف." },
   "Storytelling, ideas, copy, concepts and creative formats.": { en: "Storytelling, ideas, copy, concepts and creative formats.", ru: "Сторителлинг, идеи, тексты, концепты и креативные форматы.", es: "Narrativa, ideas, textos, conceptos y formatos creativos.", fr: "Storytelling, idées, textes, concepts et formats créatifs.", ar: "سرد، أفكار، نصوص، مفاهيم وأشكال إبداعية." },
 
-  // Models (landing)
   "Flagship: depth and quality for complex tasks.": { en: "Flagship: depth and quality for complex tasks.", ru: "Флагман: глубина и качество для сложных задач.", es: "Buque insignia: profundidad y calidad para tareas complejas.", fr: "Fleuron : profondeur et qualité pour les tâches complexes.", ar: "الرائد: عمق وجودة للمهام المعقدة." },
   "Conversational model with long context and soft tone.": { en: "Conversational model with long context and soft tone.", ru: "Разговорная модель с долгим контекстом и мягким тоном.", es: "Modelo conversacional con contexto largo y tono suave.", fr: "Modèle conversationnel avec contexte long et ton doux.", ar: "نموذج حواري بسياق طويل ونبرة ناعمة." },
   "Ultra-fast answers for iterations and short queries.": { en: "Ultra-fast answers for iterations and short queries.", ru: "Ультра-быстрые ответы для итераций и коротких запросов.", es: "Respuestas ultrarrápidas para iteraciones y consultas cortas.", fr: "Réponses ultra-rapides pour les itérations et requêtes courtes.", ar: "إجابات فائقة السرعة للتكرارات والاستفسارات القصيرة." },
   "Reasoning mode with explicit chain of thought.": { en: "Reasoning mode with explicit chain of thought.", ru: "Режим глубоких рассуждений с явной цепочкой мыслей.", es: "Modo razonamiento con cadena de pensamiento explícita.", fr: "Mode raisonnement avec chaîne de pensée explicite.", ar: "وضع الاستدلال مع سلسلة أفكار صريحة." },
 
-  // Plan features
   "Universal agent": { en: "Universal agent", ru: "Универсальный агент", es: "Agente Universal", fr: "Agent Universel", ar: "الوكيل العام" },
   "IGseek F1": { en: "IGseek F1", ru: "IGseek F1", es: "IGseek F1", fr: "IGseek F1", ar: "IGseek F1" },
   "Basic chat": { en: "Basic chat", ru: "Базовый чат", es: "Chat básico", fr: "Chat basique", ar: "محادثة أساسية" },
@@ -711,7 +690,6 @@ const DICT: Record<string, Dict> = {
   "Unlimited history": { en: "Unlimited history", ru: "Безлимитная история", es: "Historial ilimitado", fr: "Historique illimité", ar: "سجل غير محدود" },
   "Long-term memory": { en: "Long-term memory", ru: "Долговременная память", es: "Memoria a largo plazo", fr: "Mémoire longue durée", ar: "ذاكرة طويلة المدى" },
 
-  // Reset password
   "New password": { en: "New password", ru: "Новый пароль", es: "Nueva contraseña", fr: "Nouveau mot de passe", ar: "كلمة مرور جديدة" },
   "Enter a new password for your account.": { en: "Enter a new password for your account.", ru: "Введите новый пароль для аккаунта.", es: "Introduce una nueva contraseña.", fr: "Entrez un nouveau mot de passe.", ar: "أدخل كلمة مرور جديدة لحسابك." },
   "Verifying recovery link…": { en: "Verifying recovery link…", ru: "Проверяем ссылку восстановления…", es: "Verificando el enlace…", fr: "Vérification du lien…", ar: "جارٍ التحقق من رابط الاستعادة…" },
@@ -719,7 +697,6 @@ const DICT: Record<string, Dict> = {
   "Saving…": { en: "Saving…", ru: "Сохраняем…", es: "Guardando…", fr: "Enregistrement…", ar: "جارٍ الحفظ…" },
   "Save": { en: "Save", ru: "Сохранить", es: "Guardar", fr: "Enregistrer", ar: "حفظ" },
 
-  // ============ Auth & Accent Onboarding ============
   "Please choose an accent color to continue.": { ru: "Пожалуйста, выберите акцентный цвет, чтобы продолжить.", es: "Por favor, elige un color de acento para continuar.", fr: "Veuillez choisir une couleur d'accentuation pour continuer.", ar: "يرجى اختيار لون التمييز للمتابعة." },
   "User": { ru: "Пользователь", es: "Usuario", fr: "Utilisateur", ar: "المستخدم" },
   "Please enter a valid email address.": { ru: "Пожалуйста, введите корректный email.", es: "Por favor, introduce un correo electrónico válido.", fr: "Veuillez saisir une adresse e-mail valide.", ar: "يرجى إدخال عنوان بريد إلكتروني صالح." },
@@ -773,7 +750,6 @@ const DICT: Record<string, Dict> = {
     ar: "جارٍ تحميل المستند...",
   },
 
-  // Accent preset names
   "Red": { ru: "Красный", es: "Rojo", fr: "Rouge", ar: "أحمر" },
   "Orange": { ru: "Оранжевый", es: "Naranja", fr: "Orange", ar: "برتقالي" },
   "Black": { ru: "Чёрный", es: "Negro", fr: "Noir", ar: "أسود" },
@@ -783,7 +759,6 @@ const DICT: Record<string, Dict> = {
   "Pink": { ru: "Розовый", es: "Rosa", fr: "Rose", ar: "وردي" },
   "Amber": { ru: "Янтарный", es: "Ámbar", fr: "Ambre", ar: "كهرماني" },
 
-  // ============ Calendar Tab ============
   "Google Calendar session expired. Please reconnect.": { ru: "Сессия Google Календаря истекла. Подключите снова.", es: "La sesión de Google Calendar expiró. Vuelve a conectar.", fr: "La session Google Agenda a expiré. Veuillez vous reconnecter.", ar: "انتهت صلاحية جلسة تقويم Google. يرجى إعادة الاتصال." },
   "Failed to load Google Calendar events. Check your connection.": { ru: "Не удалось загрузить события Google Календаря. Проверьте подключение.", es: "Error al cargar los eventos de Google Calendar. Revisa tu conexión.", fr: "Échec du chargement des événements Google Agenda. Vérifiez votre connexion.", ar: "تعذّر تحميل أحداث تقويم Google. تحقّق من اتصالك." },
   "Error loading events": { ru: "Ошибка загрузки событий", es: "Error al cargar eventos", fr: "Erreur lors du chargement des événements", ar: "خطأ في تحميل الأحداث" },
@@ -845,7 +820,6 @@ const DICT: Record<string, Dict> = {
   "This action cannot be undone.": { ru: "Это действие нельзя отменить.", es: "Esta acción no se puede deshacer.", fr: "Cette action est irréversible.", ar: "لا يمكن التراجع عن هذا الإجراء." },
   "Yes, delete": { ru: "Да, удалить", es: "Sí, eliminar", fr: "Oui, supprimer", ar: "نعم، احذف" },
 
-  // ============ Flow Tab ============
   "Scenarios shuffled!": { ru: "Сценарии перемешаны!", es: "¡Escenarios mezclados!", fr: "Scénarios mélangés !", ar: "تم خلط السيناريوهات!" },
   "GitHub account connected:": { ru: "Аккаунт GitHub подключён:", es: "Cuenta de GitHub conectada:", fr: "Compte GitHub connecté :", ar: "تم ربط حساب GitHub:" },
   "GitHub authorization error:": { ru: "Ошибка авторизации GitHub:", es: "Error de autorización de GitHub:", fr: "Erreur d'autorisation GitHub :", ar: "خطأ في تفويض GitHub:" },
@@ -969,7 +943,6 @@ const DICT: Record<string, Dict> = {
   "Copied content:": { ru: "Содержимое скопировано:", es: "Contenido copiado:", fr: "Contenu copié :", ar: "تم نسخ المحتوى:" },
   "Copy": { ru: "Копировать", es: "Copiar", fr: "Copier", ar: "نسخ" },
 
-  // Flow scenarios
   "5 Competitors Analysis": { ru: "Анализ 5 конкурентов", es: "Análisis de 5 competidores", fr: "Analyse de 5 concurrents", ar: "تحليل 5 منافسين" },
   "Market": { ru: "Рынок", es: "Mercado", fr: "Marché", ar: "السوق" },
   "Find top 5 competitors in our niche, study their platforms, compare strengths, and save a detailed comparison table to Library.": { ru: "Найди топ-5 конкурентов в нашей нише, изучи их платформы, сравни сильные стороны и сохрани подробную сравнительную таблицу в Библиотеку.", es: "Encuentra los 5 principales competidores en nuestro nicho, analiza sus plataformas, compara fortalezas y guarda una tabla comparativa en la Biblioteca.", fr: "Trouvez les 5 principaux concurrents de notre niche, étudiez leurs plateformes, comparez leurs atouts et enregistrez un tableau comparatif dans la Bibliothèque.", ar: "ابحث عن أبرز 5 منافسين في مجالنا، وادرس منصاتهم، وقارن نقاط القوة، واحفظ جدول مقارنة مفصلًا في المكتبة." },
@@ -992,7 +965,6 @@ const DICT: Record<string, Dict> = {
   "Plan": { ru: "План", es: "Plan", fr: "Plan", ar: "خطة" },
   "Break down a new product launch into sprints: frontend, backend, QA testing, deployment, and analytics.": { ru: "Разбей запуск нового продукта на спринты: фронтенд, бэкенд, QA-тестирование, деплой и аналитика.", es: "Desglosa el lanzamiento de un nuevo producto en sprints: frontend, backend, QA, despliegue y analítica.", fr: "Découpez le lancement du produit en sprints : frontend, backend, tests QA, déploiement et analytique.", ar: "قسّم إطلاق المنتج الجديد إلى مراحل: الواجهة الأمامية والخلفية والاختبار والنشر والتحليلات." },
 
-  // ============ Gmail Tab ============
   "Failed to load mail": { ru: "Не удалось загрузить почту", es: "Error al cargar el correo", fr: "Échec du chargement des e-mails", ar: "تعذّر تحميل البريد" },
   "Gmail connection error": { ru: "Ошибка подключения Gmail", es: "Error de conexión con Gmail", fr: "Erreur de connexion à Gmail", ar: "خطأ في الاتصال بـ Gmail" },
   "You (Local)": { ru: "Вы (локально)", es: "Tú (Local)", fr: "Vous (Local)", ar: "أنت (محلي)" },
@@ -1031,7 +1003,6 @@ const DICT: Record<string, Dict> = {
   "You can restore it from Gmail Trash later.": { ru: "Позже его можно будет восстановить из корзины Gmail.", es: "Podrás restaurarlo más tarde desde la Papelera de Gmail.", fr: "Vous pourrez le restaurer plus tard depuis la corbeille Gmail.", ar: "يمكنك استعادته لاحقًا من مهملات Gmail." },
   "Move to trash": { ru: "В корзину", es: "Mover a papelera", fr: "Mettre à la corbeille", ar: "نقل إلى المهملات" },
 
-  // ============ Tasks Tab ============
   "My tasks": { ru: "Мои задачи", es: "Mis tareas", fr: "Mes tâches", ar: "مهامي" },
   "Failed to load tasks": { ru: "Не удалось загрузить задачи", es: "Error al cargar las tareas", fr: "Échec du chargement des tâches", ar: "تعذّر تحميل المهام" },
   "Google Tasks connection error": { ru: "Ошибка подключения Google Tasks", es: "Error de conexión con Google Tasks", fr: "Erreur de connexion à Google Tasks", ar: "خطأ في الاتصال بـ Google Tasks" },
@@ -1067,7 +1038,6 @@ const DICT: Record<string, Dict> = {
   "Due date": { ru: "Срок", es: "Fecha límite", fr: "Échéance", ar: "تاريخ الاستحقاق" },
   "Delete task?": { ru: "Удалить задачу?", es: "¿Eliminar tarea?", fr: "Supprimer la tâche ?", ar: "حذف المهمة؟" },
 
-  // ============ LongTextModal ============
   "lines": { ru: "стр.", es: "líneas", fr: "lignes", ar: "أسطر" },
   "Lines:": { ru: "Строк:", es: "Líneas:", fr: "Lignes :", ar: "الأسطر:" },
   "vis. ~": { ru: "виз. ~", es: "vis. ~", fr: "vis. ~", ar: "مرئي ~" },
@@ -1080,7 +1050,6 @@ const DICT: Record<string, Dict> = {
   "Reset": { ru: "Сбросить", es: "Restablecer", fr: "Réinitialiser", ar: "إعادة تعيين" },
   "Save & regenerate": { ru: "Сохранить и перезапустить", es: "Guardar y regenerar", fr: "Enregistrer et régénérer", ar: "حفظ وإعادة التوليد" },
 
-  // ============ App Chat, Composer, Artifacts & Cards ============
   "Engine project": { ru: "Проект Engine", es: "Proyecto Engine", fr: "Projet Engine", ar: "مشروع Engine" },
   "File is too large": { ru: "Файл слишком большой", es: "El archivo es demasiado grande", fr: "Le fichier est trop volumineux", ar: "الملف كبير جدًا" },
   "Email sent via Gmail!": { ru: "Письмо отправлено через Gmail!", es: "¡Correo enviado por Gmail!", fr: "E-mail envoyé via Gmail !", ar: "تم إرسال البريد عبر Gmail!" },
@@ -1136,7 +1105,6 @@ const DICT: Record<string, Dict> = {
   "open HUD": { ru: "открыть панель", es: "abrir panel", fr: "ouvrir le panneau", ar: "فتح اللوحة" },
   "Curated links to the live web — trends, launches and inspiration. Opens in a new tab.": { ru: "Подборка ссылок из сети — тренды, запуски и вдохновение. Открывается в новой вкладке.", es: "Enlaces seleccionados de la web — tendencias, lanzamientos e inspiración. Se abre en otra pestaña.", fr: "Liens choisis du web — tendances, lancements et inspiration. S'ouvre dans un nouvel onglet.", ar: "روابط مختارة من الويب — اتجاهات وإطلاقات وإلهام. تُفتح في علامة تبويب جديدة." },
 
-  // Welcome chips
   "Weekly trend analysis": { ru: "Анализ трендов недели", es: "Análisis de tendencias semanales", fr: "Analyse des tendances de la semaine", ar: "تحليل اتجاهات الأسبوع" },
   "Find and analyze the key trends in my niche for this week": { ru: "Найди и проанализируй главные тренды в моей нише за эту неделю", es: "Busca y analiza las tendencias clave de mi nicho esta semana", fr: "Trouvez et analysez les tendances clés de ma niche cette semaine", ar: "ابحث عن أبرز الاتجاهات في مجالي لهذا الأسبوع وحلّلها" },
   "Birthday card via Gmail": { ru: "Открытка через Gmail", es: "Tarjeta por Gmail", fr: "Carte d'anniversaire via Gmail", ar: "بطاقة تهنئة عبر Gmail" },
@@ -1161,7 +1129,6 @@ const DICT: Record<string, Dict> = {
   "Content topics": { ru: "Темы для контента", es: "Temas de contenido", fr: "Sujets de contenu", ar: "مواضيع المحتوى" },
   "Suggest 5 high-impact topics for this week's content plan": { ru: "Предложи 5 сильных тем для контент-плана на эту неделю", es: "Sugiere 5 temas de alto impacto para el plan de contenido de esta semana", fr: "Proposez 5 sujets percutants pour le plan éditorial de cette semaine", ar: "اقترح 5 مواضيع قوية لخطة المحتوى هذا الأسبوع" },
 
-  // ============ Library, Projects & Saved ============
   "Attached file": { ru: "Прикреплённый файл", es: "Archivo adjunto", fr: "Fichier joint", ar: "ملف مرفق" },
   "Generated photo": { ru: "Сгенерированное фото", es: "Foto generada", fr: "Photo générée", ar: "صورة مولّدة" },
   "Downloading file:": { ru: "Скачивание файла:", es: "Descargando archivo:", fr: "Téléchargement du fichier :", ar: "جارٍ تنزيل الملف:" },
@@ -1215,7 +1182,6 @@ const DICT: Record<string, Dict> = {
   "Hover a chat in the sidebar and tap the bookmark to save it here.": { ru: "Наведите на чат в боковой панели и нажмите на закладку, чтобы сохранить его здесь.", es: "Pasa el cursor sobre un chat en la barra lateral y pulsa el marcador para guardarlo aquí.", fr: "Survolez un chat dans la barre latérale et cliquez sur le signet pour l'enregistrer ici.", ar: "مرّر المؤشر فوق محادثة في الشريط الجانبي واضغط على الإشارة لحفظها هنا." },
   "Remove from Saved": { ru: "Убрать из Сохранённого", es: "Quitar de Guardados", fr: "Retirer des Enregistrés", ar: "إزالة من المحفوظات" },
 
-  // ============ Engine & Vercel ============
   "Hi! I'm IGseek Code Engine. Describe your project — I'll generate a ready-to-deploy Vercel build and place the source files in the **Files** tab.": { ru: "Привет! Я IGseek Code Engine. Опишите свой проект — я сгенерирую готовую сборку для Vercel и разложу исходные файлы во вкладке **Файлы**.", es: "¡Hola! Soy IGseek Code Engine. Describe tu proyecto y generaré una compilación lista para Vercel con los archivos en la pestaña **Archivos**.", fr: "Bonjour ! Je suis IGseek Code Engine. Décrivez votre projet et je générerai un build prêt pour Vercel dans l'onglet **Fichiers**.", ar: "مرحبًا! أنا IGseek Code Engine. صف مشروعك وسأولّد حزمة جاهزة للنشر على Vercel وأضع الملفات في تبويب **الملفات**." },
   "Method 1: Deploy via Vercel CLI (Recommended)": { ru: "Способ 1: Деплой через Vercel CLI (рекомендуется)", es: "Método 1: Desplegar con Vercel CLI (Recomendado)", fr: "Méthode 1 : Déployer via Vercel CLI (Recommandé)", ar: "الطريقة 1: النشر عبر Vercel CLI (موصى به)" },
   "Click the button below to download the source code archive (ZIP).": { ru: "Нажмите кнопку ниже, чтобы скачать архив с исходным кодом (ZIP).", es: "Haz clic en el botón de abajo para descargar el archivo ZIP del código fuente.", fr: "Cliquez sur le bouton ci-dessous pour télécharger l'archive ZIP du code source.", ar: "انقر على الزر أدناه لتنزيل أرشيف الشيفرة المصدرية (ZIP)." },
@@ -1252,7 +1218,6 @@ const DICT: Record<string, Dict> = {
   "Export .zip Vercel": { ru: "Экспорт .zip Vercel", es: "Exportar .zip Vercel", fr: "Exporter .zip Vercel", ar: "تصدير .zip لـ Vercel" },
   "chars": { ru: "симв.", es: "caract.", fr: "car.", ar: "حرف" },
 
-  // ============ Gmail Auth Modal & Settings ============
   "Gmail connected successfully!": { ru: "Gmail успешно подключён!", es: "¡Gmail conectado con éxito!", fr: "Gmail connecté avec succès !", ar: "تم ربط Gmail بنجاح!" },
   "No Subject": { ru: "Без темы", es: "Sin asunto", fr: "Sans objet", ar: "بدون موضوع" },
   "Email sent successfully to": { ru: "Письмо успешно отправлено на", es: "Correo enviado con éxito a", fr: "E-mail envoyé avec succès à", ar: "تم إرسال البريد بنجاح إلى" },
@@ -1312,7 +1277,6 @@ const DICT: Record<string, Dict> = {
   "Semantic memory and web search": { ru: "Семантическая память и веб-поиск", es: "Memoria semántica y búsqueda web", fr: "Mémoire sémantique et recherche web", ar: "ذاكرة دلالية وبحث على الويب" },
   "Sign out": { ru: "Выйти из аккаунта", es: "Cerrar sesión", fr: "Se déconnecter", ar: "تسجيل الخروج" },
 
-  // ============ Memory HUD & Misc ============
   "Preference": { ru: "Предпочтения", es: "Preferencia", fr: "Préférence", ar: "تفضيل" },
   "Goal": { ru: "Цель", es: "Objetivo", fr: "Objectif", ar: "هدف" },
   "Device": { ru: "Устройство", es: "Dispositivo", fr: "Appareil", ar: "جهاز" },
@@ -1333,7 +1297,6 @@ const DICT: Record<string, Dict> = {
   "more": { ru: "ещё", es: "más", fr: "plus", ar: "المزيد" },
   "Semantic memory · live": { ru: "Семантическая память · онлайн", es: "Memoria semántica · activa", fr: "Mémoire sémantique · en direct", ar: "الذاكرة الدلالية · مباشرة" },
 
-  // ============ Landing / Model tags ============
   "Agents": { ru: "Агенты", es: "Agentes", fr: "Agents", ar: "الوكلاء" },
   "Models": { ru: "Модели", es: "Modelos", fr: "Modèles", ar: "النماذج" },
   "Open menu": { ru: "Открыть меню", es: "Abrir menú", fr: "Ouvrir le menu", ar: "فتح القائمة" },
@@ -1349,7 +1312,6 @@ const DICT: Record<string, Dict> = {
   "Pause": { ru: "Пауза", es: "Pausar", fr: "Pause", ar: "إيقاف مؤقت" },
   "Play": { ru: "Воспроизвести", es: "Reproducir", fr: "Lire", ar: "تشغيل" },
 
-  // ============ Root Errors & Boundaries ============
   "Page not found": { ru: "Страница не найдена", es: "Página no encontrada", fr: "Page introuvable", ar: "الصفحة غير موجودة" },
   "The page you're looking for doesn't exist or has been moved.": { ru: "Запрашиваемая страница не существует или была перемещена.", es: "La página que buscas no existe o ha sido movida.", fr: "La page que vous recherchez n'existe pas ou a été déplacée.", ar: "الصفحة التي تبحث عنها غير موجودة أو تم نقلها." },
   "Go home": { ru: "На главную", es: "Ir al inicio", fr: "Accueil", ar: "العودة للرئيسية" },
@@ -1357,7 +1319,6 @@ const DICT: Record<string, Dict> = {
   "Something went wrong on our end. You can try refreshing or head back home.": { ru: "Произошла ошибка на нашей стороне. Попробуйте обновить страницу или вернуться на главную.", es: "Algo salió mal de nuestro lado. Puedes intentar actualizar o volver al inicio.", fr: "Un problème est survenu de notre côté. Essayez d'actualiser ou de revenir à l'accueil.", ar: "حدث خطأ من جانبنا. يمكنك محاولة التحديث أو العودة إلى الرئيسية." },
   "Try again": { ru: "Попробовать снова", es: "Intentar de nuevo", fr: "Réessayer", ar: "حاول مرة أخرى" },
 
-  // ============ Engine Preview & Analytics & Discover ============
   "Live Preview": { ru: "Живой предпросмотр", es: "Vista previa en vivo", fr: "Aperçu en direct", ar: "معاينة مباشرة" },
   "Desktop": { ru: "ПК", es: "Escritorio", fr: "Bureau", ar: "سطح المكتب" },
   "Mobile": { ru: "Телефон", es: "Móvil", fr: "Mobile", ar: "الجوال" },
@@ -1386,7 +1347,6 @@ const DICT: Record<string, Dict> = {
   "Reset all data and start fresh? This will clear local storage and sign out.": { ru: "Сбросить все данные и начать с нуля? Это очистит кэш и завершит сеанс.", es: "¿Restablecer todos los datos y empezar de nuevo? Esto borrará el almacenamiento local y cerrará sesión.", fr: "Réinitialiser toutes les données et recommencer ? Cela effacera le stockage local et déconnectera.", ar: "هل تريد إعادة تعيين جميع البيانات والبدء من جديد؟ سيؤدي ذلك إلى مسح التخزين المحلي وتسجيل الخروج." },
   "Reset app data": { ru: "Сбросить данные", es: "Restablecer datos", fr: "Réinitialiser", ar: "إعادة تعيين البيانات" },
 
-  // ============ Prompt Limits ============
   "Prompt limits": { ru: "Лимиты промптов", es: "Límites de prompts", fr: "Limites de prompts", ar: "حدود الأوامر" },
   "Prompts": { ru: "Промпты", es: "Prompts", fr: "Prompts", ar: "الأوامر" },
   "Prompts used": { ru: "Использовано промптов", es: "Prompts usados", fr: "Prompts utilisés", ar: "الأوامر المستخدمة" },
@@ -1468,6 +1428,42 @@ const DICT: Record<string, Dict> = {
     fr: "Vous avez utilisé les 8 générations et retouches photo quotidiennes. La limite se réinitialise automatiquement toutes les 24 heures et le chat texte reste illimité.",
     ar: "لقد استخدمت جميع الـ 8 عمليات توليد وتعديل للصور اليومية. يتجدد الحد تلقائيًا كل 24 ساعة، وتبقى المحادثة النصية غير محدودة.",
   },
+  "Delete chat": {
+    ru: "Удалить чат",
+    es: "Eliminar chat",
+    fr: "Supprimer le chat",
+    ar: "حذف المحادثة",
+  },
+  "Chat and all messages will be deleted from this device and IGseek cloud.": {
+    ru: "Чат и вся история сообщений будут удалены с этого устройства и из облака IGseek.",
+    es: "El chat y todo su historial de mensajes se eliminarán de este dispositivo y de la nube de IGseek.",
+    fr: "Le chat et tout son historique de messages seront supprimés de cet appareil et du cloud IGseek.",
+    ar: "سيتم حذف المحادثة وسجل رسائلها بالكامل من هذا الجهاز ومن سحابة IGseek.",
+  },
+  "Chat deleted": {
+    ru: "Чат удалён",
+    es: "Chat eliminado",
+    fr: "Chat supprimé",
+    ar: "تم حذف المحادثة",
+  },
+  "Failed to delete chat from cloud": {
+    ru: "Не удалось удалить чат из облака",
+    es: "No se pudo eliminar el chat de la nube",
+    fr: "Impossible de supprimer le chat du cloud",
+    ar: "تعذّر حذف المحادثة من السحابة",
+  },
+  "Delete project": {
+    ru: "Удалить проект",
+    es: "Eliminar proyecto",
+    fr: "Supprimer le projet",
+    ar: "حذف المشروع",
+  },
+  "Chats inside this project will stay available in Recent.": {
+    ru: "Чаты из этого проекта останутся в разделе «Недавние».",
+    es: "Los chats de este proyecto seguirán disponibles en Recientes.",
+    fr: "Les chats de ce projet resteront disponibles dans Récents.",
+    ar: "ستبقى المحادثات داخل هذا المشروع متاحة في الأخيرة.",
+  },
 };
 
 const LOCALES: Record<LangCode, string> = {
@@ -1492,9 +1488,6 @@ export function syncDocumentLang(lang: LangCode) {
   document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
 }
 
-/** Read `igseek:lang` from localStorage. Subscribes to cross-tab `storage` and
- *  same-tab `igseek:lang-change` custom events so any page reflects the choice
- *  made in /app. */
 export function readStoredLang(): LangCode {
   if (typeof window === "undefined") return "en";
   const v = window.localStorage.getItem("igseek:lang");
@@ -1502,8 +1495,6 @@ export function readStoredLang(): LangCode {
   return "en";
 }
 
-/** React hook that returns the current UI language, listening for changes
- *  written to localStorage under `igseek:lang` (cross-tab + same-tab). */
 export function useLang(): LangCode {
   const [lang, setLang] = useState<LangCode>(() => readStoredLang());
   useEffect(() => {
@@ -1528,10 +1519,7 @@ export function useLang(): LangCode {
   return lang;
 }
 
-/** React hook returning the translate function for the current language. */
 export function useT() {
   const lang = useLang();
   return makeT(lang);
 }
-
-

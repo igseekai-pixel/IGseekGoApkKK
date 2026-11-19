@@ -3,7 +3,7 @@
   "appName": "IGseek",
   "webDir": "dist",
   "server": {
-    "url": "https://chats-igseek-2026.ai.studio",
+    "url": "https://really-igseek-2026.ai.studio",
     "cleartext": false,
     "androidScheme": "https"
   },

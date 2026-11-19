@@ -1,21 +1,14 @@
-/**
- * GitHub OAuth 2.0 & Token Verification Endpoint for Flow
- */
-
 export async function handleGitHubAuth(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // 1. GET /api/auth/github/url - Generate real GitHub authorization URL
   if (path.endsWith("/url") && request.method === "GET") {
     const customClientId = url.searchParams.get("client_id");
     const clientId = customClientId || process.env.GITHUB_CLIENT_ID || "";
     const requestedScopes = url.searchParams.get("scopes") || "repo,read:user,user:email";
-    
-    // Redirect URI must point back to our callback
+
     const redirectUri = `${url.origin}/api/auth/github/callback`;
 
-    // Construct the real GitHub OAuth URL
     const authParams = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -39,7 +32,6 @@ export async function handleGitHubAuth(request: Request): Promise<Response> {
     );
   }
 
-  // 2. GET /api/auth/github/callback - Handle OAuth redirect and exchange code
   if (path.endsWith("/callback") && request.method === "GET") {
     const code = url.searchParams.get("code");
     const error = url.searchParams.get("error");
@@ -179,7 +171,6 @@ export async function handleGitHubAuth(request: Request): Promise<Response> {
     });
   }
 
-  // 3. POST /api/auth/github/verify - Verify Personal Access Token or OAuth token
   if (path.endsWith("/verify") && request.method === "POST") {
     try {
       const body = await request.json();

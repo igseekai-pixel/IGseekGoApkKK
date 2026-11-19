@@ -104,7 +104,6 @@ function Logo({ size = 24 }: { size?: number }) {
   );
 }
 
-/* -------------------------- Ticker -------------------------- */
 function Ticker() {
   const items = ["Multi-agent", "Instinct 4.0", "F1", "3.2 Chat", "Reasoner", "Artifacts"];
   const loop = [...items, ...items, ...items, ...items];
@@ -132,8 +131,6 @@ function Ticker() {
     </div>
   );
 }
-
-/* -------------------------- Info Panels -------------------------- */
 
 const AGENTS = [
   { icon: Sparkles, name: "Universal", desc: "Universal IGseek without specialization — a base for any task." },
@@ -167,9 +164,6 @@ const WAVE_FEATURES = [
   { icon: PhoneCall, title: "Like a phone call", desc: "Communicate more naturally, almost like on a regular phone call." },
 ];
 
-
-
-
 function PanelShell({ children }: { children: React.ReactNode }) {
   return (
     <motion.div
@@ -198,9 +192,6 @@ function GoToChatButton({ label }: { label?: string }) {
     </Link>
   );
 }
-
-
-
 
 const stagger = {
   hidden: {},
@@ -364,10 +355,6 @@ function ModelsPanel() {
   );
 }
 
-
-
-
-/* -------------------------- Trailer Showcase -------------------------- */
 function TrailerShowcase() {
   const t = useT();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -428,7 +415,6 @@ function TrailerShowcase() {
       transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
       className="relative mt-12 w-full max-w-5xl px-2 sm:mt-16 sm:px-4"
     >
-      {/* Section label */}
       <div className="mb-4 flex items-center justify-center gap-3 sm:mb-6">
         <span className="h-px w-8 bg-border" />
         <span className="font-pixel text-[10px] uppercase tracking-[0.35em] text-foreground font-semibold">
@@ -453,7 +439,6 @@ function TrailerShowcase() {
           style={{ transformStyle: "preserve-3d" }}
           className="relative overflow-hidden rounded-2xl border border-border bg-black shadow-xl"
         >
-          {/* Window chrome */}
           <div className="relative z-10 flex items-center justify-between border-b border-white/10 bg-black/80 px-4 py-2.5 backdrop-blur">
             <div className="flex items-center gap-1.5">
               <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
@@ -482,7 +467,6 @@ function TrailerShowcase() {
             </div>
           </div>
 
-          {/* Video */}
           <div className="relative aspect-video w-full bg-black">
             <video
               ref={videoRef}
@@ -495,7 +479,6 @@ function TrailerShowcase() {
               onClick={toggle}
             />
 
-            {/* Vignette */}
             <div
               aria-hidden
               className="pointer-events-none absolute inset-0"
@@ -505,7 +488,6 @@ function TrailerShowcase() {
               }}
             />
 
-            {/* Hover play/pause */}
             <button
               onClick={toggle}
               className="absolute inset-0 grid place-items-center focus:outline-none"
@@ -524,7 +506,6 @@ function TrailerShowcase() {
               </motion.span>
             </button>
 
-            {/* Bottom badge */}
             <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-md border border-white/15 bg-black/60 px-2.5 py-1 text-[10px] uppercase tracking-[0.25em] text-white/80 backdrop-blur sm:bottom-4 sm:left-4">
               <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
               {t("Live demo")}
@@ -533,7 +514,6 @@ function TrailerShowcase() {
         </motion.div>
       </div>
 
-      {/* Caption */}
       <p className="mt-6 text-center text-xs text-muted-foreground sm:text-sm">
         {t("90 seconds to feel IGseek — agents, reasoning and artifacts in action.")}
       </p>
@@ -541,14 +521,12 @@ function TrailerShowcase() {
   );
 }
 
-
 const PANELS: Record<TabKey, () => React.ReactElement> = {
   engine: EnginePanel,
   wave: WavePanel,
   models: ModelsPanel,
 };
 
-/* -------------------------- Page -------------------------- */
 function Landing() {
   const t = useT();
   const lang = useLang();
@@ -636,7 +614,6 @@ function Landing() {
         @keyframes igseek-breathe { 0%,100% { opacity: 0.55; transform: scale(1); } 50% { opacity: 0.8; transform: scale(1.06); } }
       `}</style>
 
-      {/* Subtle grid — same as /app */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 z-0 opacity-[0.05] text-foreground"
@@ -647,7 +624,6 @@ function Landing() {
         }}
       />
 
-      {/* NAV pill */}
       <div className="relative z-30 flex justify-center px-3 pt-3 md:pt-6">
         <nav className="flex items-center gap-3 rounded-xl border border-border bg-surface/85 px-3 py-2 shadow-sm backdrop-blur-md sm:gap-5 sm:px-4 sm:py-3 md:gap-6 md:px-6">
           <button onClick={closeTab} className="flex items-center gap-2">
@@ -784,8 +760,6 @@ function Landing() {
         </nav>
       </div>
 
-
-      {/* HERO or PANEL */}
       <div className="relative z-10 mt-6 flex flex-1 flex-col items-center overflow-y-auto px-4 pb-24 text-center sm:mt-8 md:mt-12 md:pb-28">
         <AnimatePresence mode="wait">
           {!tab ? (
@@ -859,9 +833,6 @@ function Landing() {
         </AnimatePresence>
       </div>
 
-      
-
-      {/* MOBILE MENU */}
       <div
         className={`fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur-md transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
           menuOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"

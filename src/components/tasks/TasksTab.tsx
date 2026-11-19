@@ -56,26 +56,21 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
   const [selectedListId, setSelectedListId] = useState<string>('@default');
   const [tasks, setTasks] = useState<GoogleTask[]>([]);
 
-  // Filter and search
   const [filter, setFilter] = useState<'all' | 'active' | 'completed' | 'today'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Create task modal / inline composer state
   const [isAdding, setIsAdding] = useState<boolean>(false);
   const [newTitle, setNewTitle] = useState<string>('');
   const [newNotes, setNewNotes] = useState<string>('');
   const [newDue, setNewDue] = useState<string>('');
 
-  // Edit modal state
   const [editingTask, setEditingTask] = useState<GoogleTask | null>(null);
   const [editTitle, setEditTitle] = useState<string>('');
   const [editNotes, setEditNotes] = useState<string>('');
   const [editDue, setEditDue] = useState<string>('');
 
-  // Deletion modal state
   const [deletingTask, setDeletingTask] = useState<GoogleTask | null>(null);
 
-  // Sync token state
   useEffect(() => {
     const handleAuthChange = (e: CustomEvent) => {
       setIsConnected(e.detail?.connected ?? false);
@@ -84,7 +79,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
     return () => window.removeEventListener('igseek:tasks-auth-changed' as any, handleAuthChange);
   }, []);
 
-  // Listen to local task updates
   useEffect(() => {
     const handleLocalUpdate = () => {
       if (!isConnected) {
@@ -95,7 +89,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
     return () => window.removeEventListener('igseek:local-tasks-updated', handleLocalUpdate);
   }, [isConnected]);
 
-  // Load data
   const loadData = async () => {
     setLoading(true);
     setError(null);
@@ -103,14 +96,12 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
       const token = getCachedTasksToken();
       if (token) {
         setIsConnected(true);
-        // Load task lists
         try {
           const lists = await listTaskLists();
           setTaskLists(lists);
         } catch {
           setTaskLists([{ id: '@default', title: t('My tasks') }]);
         }
-        // Load tasks from selected list
         const remoteTasks = await listGoogleTasks(selectedListId, true);
         setTasks(remoteTasks);
       } else {
@@ -152,7 +143,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
 
   const handleToggleTask = async (task: GoogleTask) => {
     const nextStatus = task.status === 'completed' ? 'needsAction' : 'completed';
-    // Optimistic UI update
     setTasks((prev) =>
       prev.map((t) => (t.id === task.id ? { ...t, status: nextStatus } : t))
     );
@@ -164,7 +154,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         toggleLocalTaskStatus(task.id);
       }
     } catch (err: any) {
-      // Revert on failure
       setTasks((prev) =>
         prev.map((t) => (t.id === task.id ? { ...t, status: task.status } : t))
       );
@@ -250,10 +239,8 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
     }
   };
 
-  // Filter tasks
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
-      // Search
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesTitle = task.title.toLowerCase().includes(q);
@@ -261,7 +248,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         if (!matchesTitle && !matchesNotes) return false;
       }
 
-      // Status filters
       if (filter === 'active') return task.status === 'needsAction';
       if (filter === 'completed') return task.status === 'completed';
       if (filter === 'today') {
@@ -290,7 +276,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-4xl mx-auto pb-12">
-      {/* Header Banner */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl border border-border bg-surface/70 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand/15 text-brand border border-brand/20">
@@ -357,9 +342,7 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         </div>
       )}
 
-      {/* Task Controls: Lists Dropdown, Search, Filters */}
       <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-        {/* Task lists selector if connected */}
         {isConnected && taskLists.length > 0 && (
           <div className="relative shrink-0">
             <div className="glass-card flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-xs font-medium">
@@ -379,7 +362,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
           </div>
         )}
 
-        {/* Search */}
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
@@ -391,7 +373,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
           />
         </div>
 
-        {/* Filter Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
           {[
             { id: 'all', label: `${t('All')} (${tasks.length})` },
@@ -414,7 +395,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         </div>
       </div>
 
-      {/* Add Task Button or Form */}
       {!isAdding ? (
         <button
           onClick={() => setIsAdding(true)}
@@ -492,7 +472,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         </motion.form>
       )}
 
-      {/* Task List Items */}
       {loading ? (
         <div className="flex flex-col gap-2 py-8">
           {[1, 2, 3].map((i) => (
@@ -568,7 +547,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
                     </div>
                   </div>
 
-                  {/* Actions */}
                   <div className="flex items-center gap-1.5 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
                     {onAskAiAboutTask && (
                       <button
@@ -609,7 +587,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         </div>
       )}
 
-      {/* Edit Modal */}
       <AnimatePresence>
         {editingTask && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">
@@ -686,7 +663,6 @@ export function TasksTab({ onAskAiAboutTask, onNavigateToChat }: TasksTabProps) 
         )}
       </AnimatePresence>
 
-      {/* Delete Confirmation Modal (MANDATORY per Workspace guidelines) */}
       <AnimatePresence>
         {deletingTask && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">

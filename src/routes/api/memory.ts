@@ -1,11 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { getUserFromToken, listAllMemories } from "../../lib/memory-server";
-import { db, collection, addDoc, doc, updateDoc, deleteDoc } from "../../lib/firebase";
+import {
+  createMemory,
+  deleteMemory,
+  getUserFromToken,
+  listAllMemories,
+  updateMemory,
+} from "../../lib/memory-server";
 
 function bearer(request: Request) {
   const h = request.headers.get("authorization") ?? "";
-  return h.toLowerCase().startsWith("bearer ") ? h.slice(7) : "";
+  return h.toLowerCase().startsWith("bearer ") ? h.slice(7).trim() : "";
 }
 
 async function auth(request: Request) {
@@ -14,17 +19,26 @@ async function auth(request: Request) {
   return getUserFromToken(token);
 }
 
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+const MAX_ATTACHMENT_BYTES = 850_000;
+
 const UpsertSchema = z.object({
   id: z.string().min(1).max(128).optional(),
   content: z.string().min(1).max(4000),
   kind: z.string().max(30).optional(),
   attachment: z
     .object({
-      name: z.string(),
-      type: z.string(),
+      name: z.string().max(260),
+      type: z.string().max(120),
       size: z.number().optional(),
-      dataUrl: z.string().optional(),
-      textContent: z.string().optional(),
+      dataUrl: z.string().max(MAX_ATTACHMENT_BYTES).optional(),
+      textContent: z.string().max(40_000).optional(),
     })
     .nullable()
     .optional(),
@@ -34,73 +48,85 @@ const DeleteSchema = z.object({ id: z.string().min(1).max(128) });
 
 export async function handleMemoryRequest(request: Request): Promise<Response> {
   const authed = await auth(request);
-  if (!authed) return new Response("Unauthorized", { status: 401 });
+  if (!authed) {
+    return jsonResponse({ error: "Unauthorized: valid Firebase sign-in required" }, 401);
+  }
 
   if (request.method === "GET") {
-    const items = await listAllMemories(authed.client, authed.id);
-    return new Response(JSON.stringify({ items }), {
-      headers: { "content-type": "application/json" },
-    });
+    try {
+      const items = await listAllMemories(authed.client, authed.id, authed.token);
+      return jsonResponse({ items });
+    } catch (err: any) {
+      const status = err?.status === 401 || err?.status === 403 ? err.status : 500;
+      console.error("Memory GET error", err);
+      return jsonResponse({ error: err?.message || "Failed to load memories" }, status);
+    }
   }
 
   if (request.method === "POST") {
-    let body;
+    let body: z.infer<typeof UpsertSchema>;
     try {
-      body = UpsertSchema.parse(await request.json());
-    } catch (err) {
+      const rawJson = await request.json();
+      body = UpsertSchema.parse(rawJson);
+    } catch (err: any) {
       console.error("Memory POST validation error", err);
-      return new Response("Bad request", { status: 400 });
+      const isTooBig = String(err?.message || "").includes("too_big") || String(err?.message || "").includes(String(MAX_ATTACHMENT_BYTES));
+      return jsonResponse(
+        {
+          error: isTooBig
+            ? "Файл слишком большой для хранения в облачной памяти (лимит ~800 КБ)."
+            : "Некорректные данные записи памяти.",
+        },
+        400,
+      );
     }
 
     try {
       if (body.id) {
-        const patch: Record<string, unknown> = {
+        await updateMemory(authed.id, authed.token, body.id, {
           content: body.content,
-          updated_at: new Date().toISOString(),
-        };
-        if (body.kind) patch.kind = body.kind;
-        if (body.attachment !== undefined) patch.attachment = body.attachment;
-        await updateDoc(doc(db, "memories", body.id), patch);
+          kind: body.kind,
+          attachment: body.attachment,
+        });
       } else {
-        await addDoc(collection(db, "memories"), {
-          user_id: authed.id,
+        await createMemory(authed.id, authed.token, {
           content: body.content,
           kind: body.kind || "other",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          ...(body.attachment ? { attachment: body.attachment } : {}),
+          attachment: body.attachment,
         });
       }
     } catch (err: any) {
+      const status = err?.status === 401 || err?.status === 403 ? err.status : 500;
       console.error("Firestore memory save error", err);
-      return new Response(err?.message || "Failed to save memory", { status: 500 });
+      return jsonResponse({ error: err?.message || "Failed to save memory" }, status);
     }
 
-    const items = await listAllMemories(authed.client, authed.id);
-    return new Response(JSON.stringify({ items }), {
-      headers: { "content-type": "application/json" },
-    });
+    try {
+      const items = await listAllMemories(authed.client, authed.id, authed.token);
+      return jsonResponse({ items });
+    } catch (err: any) {
+      return jsonResponse({ error: err?.message || "Saved but failed to reload" }, 500);
+    }
   }
 
   if (request.method === "DELETE") {
-    let body;
+    let body: z.infer<typeof DeleteSchema>;
     try {
       body = DeleteSchema.parse(await request.json());
     } catch {
-      return new Response("Bad request", { status: 400 });
+      return jsonResponse({ error: "Bad request" }, 400);
     }
     try {
-      await deleteDoc(doc(db, "memories", body.id));
+      await deleteMemory(authed.token, body.id);
     } catch (err: any) {
+      const status = err?.status === 401 || err?.status === 403 ? err.status : 500;
       console.error("Firestore memory delete error", err);
-      return new Response(err?.message || "Failed to delete memory", { status: 500 });
+      return jsonResponse({ error: err?.message || "Failed to delete memory" }, status);
     }
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { "content-type": "application/json" },
-    });
+    return jsonResponse({ ok: true });
   }
 
-  return new Response("Method not allowed", { status: 405 });
+  return jsonResponse({ error: "Method not allowed" }, 405);
 }
 
 export const Route = createFileRoute("/api/memory")({

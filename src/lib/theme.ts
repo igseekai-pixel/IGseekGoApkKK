@@ -198,7 +198,6 @@ export function getStoredTheme(): Theme {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved === "light" || saved === "dark") return saved;
   } catch {
-    /* ignore */
   }
   return DEFAULT_THEME;
 }
@@ -209,7 +208,6 @@ export function getStoredAccent(): AccentId {
     const saved = window.localStorage.getItem(ACCENT_STORAGE_KEY);
     if (saved && ACCENT_PRESETS.some((p) => p.id === saved)) return saved as AccentId;
   } catch {
-    /* ignore */
   }
   return "default";
 }
@@ -227,7 +225,6 @@ export function applyAccent(accentId: AccentId, theme: Theme = getStoredTheme())
   const bubbleBg = isLight ? preset.lightVal : preset.darkBubbleBg;
   const shadow = isLight ? preset.lightShadow : preset.darkShadow;
   const glowShadow = isLight ? preset.lightGlowShadow : preset.darkGlowShadow;
-  // Logo filter is black silhouette for default/black in light theme, otherwise follows accent preset filter
   const logoFilter = isLight && (accentId === "default" || accentId === "black") ? "brightness(0)" : preset.logoFilter;
 
   root.style.setProperty("--brand", color);
@@ -247,7 +244,6 @@ export function applyAccent(accentId: AccentId, theme: Theme = getStoredTheme())
   try {
     window.localStorage.setItem(ACCENT_STORAGE_KEY, accentId);
   } catch {
-    /* ignore */
   }
 
   window.dispatchEvent(new CustomEvent("igseek:accent-change", { detail: accentId }));
@@ -256,7 +252,7 @@ export function applyAccent(accentId: AccentId, theme: Theme = getStoredTheme())
 export function applyTheme(theme: Theme) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
-  
+
   if (theme === "light") {
     root.classList.add("light");
     root.classList.remove("dark");
@@ -264,16 +260,14 @@ export function applyTheme(theme: Theme) {
     root.classList.add("dark");
     root.classList.remove("light");
   }
-  
+
   root.style.colorScheme = theme;
-  
+
   try {
     window.localStorage.setItem(STORAGE_KEY, theme);
   } catch {
-    /* ignore */
   }
 
-  // Re-apply accent when theme changes
   applyAccent(getStoredAccent(), theme);
 
   window.dispatchEvent(new CustomEvent("igseek:theme-change", { detail: theme }));
@@ -283,7 +277,6 @@ export function useTheme(): [Theme, (next: Theme | ((prev: Theme) => Theme)) => 
   const [theme, setThemeState] = useState<Theme>(() => getStoredTheme());
 
   useEffect(() => {
-    // Sync initial theme class on mount
     applyTheme(theme);
 
     const handleThemeChange = (e: Event) => {
@@ -344,4 +337,3 @@ export function useAccent(): [AccentId, (next: AccentId) => void] {
 
   return [accent, setAccent];
 }
-

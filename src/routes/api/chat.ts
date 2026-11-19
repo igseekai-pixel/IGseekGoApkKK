@@ -7,9 +7,13 @@ import {
 } from "../../lib/system-prompts";
 import {
   analyzeAndUpdateMemory,
+  createMemory,
+  deleteMemory,
   getUserFromToken,
   loadRelevantMemories,
   listAllMemories,
+  updateMemory,
+  type MemoryAttachment,
   type MemoryRow,
 } from "../../lib/memory-server";
 import { checkContent, refusalMessage } from "../../lib/content-filters";
@@ -21,11 +25,16 @@ import {
   resolvePhotoQuotaActorKey,
 } from "../../lib/photo-limits-server";
 import { searchWebLive } from "../../lib/web-search";
+import {
+  extractLibraryText,
+  findLibraryFiles,
+  libraryItemToBase64DataUrl,
+  listAllLibraryFilesServer,
+  type ServerLibraryItem,
+} from "../../lib/library-server";
 
 const MessageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
-  // Пользователь может прикрепить изображение — оно приходит как base64 data-URL
-  // внутри markdown (`![name](data:image/png;base64,...)`), поэтому лимит большой.
   content: z.string().max(16_000_000),
 });
 
@@ -59,11 +68,27 @@ const BodySchema = z.object({
       resetAt: z.number().int().min(0),
     })
     .optional(),
+  libraryFiles: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        name: z.string(),
+        type: z.string().optional(),
+        mimeType: z.string().optional(),
+        content: z.string().max(500_000).optional(),
+        dataUrl: z.string().max(1_000_000).optional(),
+        source: z.string().optional(),
+        chatTitle: z.string().optional(),
+        updatedAt: z.string().optional(),
+      })
+    )
+    .max(50)
+    .optional(),
 });
 
 type ChatMessage =
   | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "assistant"; content: string | null; reasoning_content?: string; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
 type ToolCall = {
@@ -236,7 +261,7 @@ const GMAIL_TOOL = {
   function: {
     name: "manage_gmail",
     description:
-      "Найти, прочитать, составить или отправить письмо через Gmail пользователя. Поддерживает вложения (сгенерированные открытки/изображения, приложенные пользователем файлы, документы из памяти). Используй всегда, когда пользователь просит проверить почту, найти письмо, составить или отправить email (например: 'отправь открытку маме', 'отправь отчет боссу').",
+      "Найти, прочитать, составить или отправить письмо через Gmail пользователя. Поддерживает вложения (сгенерированные открытки/изображения, приложенные пользователем файлы, документы из памяти или из Library). Используй всегда, когда пользователь просит проверить почту, найти письмо, составить или отправить email (например: 'отправь открытку маме', 'отправь боссу отчет из library').",
     parameters: {
       type: "object",
       properties: {
@@ -255,14 +280,15 @@ const GMAIL_TOOL = {
           items: {
             type: "object",
             properties: {
-              filename: { type: "string", description: "Имя файла вложения (например 'birthday_card.png', 'report.pdf')." },
+              filename: { type: "string", description: "Имя файла вложения (например 'birthday_card.png', 'report.txt', 'отчет.md')." },
               source: {
                 type: "string",
-                enum: ["generated_image", "user_upload", "memory"],
-                description: "Источник вложения: generated_image (сгенерированная открытка/фото), user_upload (файл, прикрепленный пользователем к сообщению), memory (файл/документ из памяти).",
+                enum: ["generated_image", "user_upload", "memory", "library"],
+                description: "Источник вложения: generated_image (сгенерированная открытка/фото), user_upload (файл от пользователя), memory (файл/документ из памяти), library (файл/отчет/артефакт/фото из Library).",
               },
               data_url: { type: "string", description: "Data-URL вложения если доступен." },
               memory_id: { type: "string", description: "ID записи памяти, если вложение берется из памяти." },
+              library_id: { type: "string", description: "ID файла из Library, если вложение берется из Library." },
             },
             required: ["filename"],
           },
@@ -270,6 +296,33 @@ const GMAIL_TOOL = {
         },
       },
       required: ["action"],
+    },
+  },
+};
+
+const SEARCH_AND_READ_LIBRARY_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "search_and_read_library",
+    description:
+      "Найти и полностью прочитать файлы, отчеты, документы, код, артефакты и изображения из единой Библиотеки пользователя (Library). " +
+      "ИСПОЛЬЗУЙ ВСЕГДА, когда пользователь упоминает файл из библиотеки/library ('возьми мой отчет из library', 'найди файл в библиотеке', 'отправь отчет который лежит в library', 'прочитай документ из library').",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Поисковый запрос по названию или содержимому файла (например: 'отчет', 'report', 'презентация', 'config').",
+        },
+        library_id: {
+          type: "string",
+          description: "Точный ID файла из каталога USER LIBRARY CATALOG, если он уже известен.",
+        },
+        filename: {
+          type: "string",
+          description: "Точное или частичное имя файла из Library.",
+        },
+      },
     },
   },
 };
@@ -292,6 +345,56 @@ const MEMORY_TOOL = {
           description: "ID конкретной записи памяти, если нужно прочитать её полное вложение/текст.",
         },
       },
+    },
+  },
+};
+
+const MANAGE_MEMORY_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "manage_memory",
+    description:
+      "Сохранить, обновить или удалить факт/заметку/файл в долговременной памяти пользователя (Memory HUD). " +
+      "ИСПОЛЬЗУЙ АВТОНОМНО В ДВУХ СЛУЧАЯХ: " +
+      "1) Пользователь прямо просит что-то запомнить, сохранить, записать, изменить или удалить из памяти ('запомни...', 'сохрани в память...', 'запиши...', 'не забудь...', 'удали из памяти...', 'измени в памяти...'); " +
+      "2) Пользователь сообщает важные долговременные факты о себе или прикрепляет важный документ (имя, контакты, email близких/коллег, предпочтения, стек технологий, проекты, устройства, цели, стиль общения).",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["save", "update", "delete", "list"],
+          description:
+            "save — добавить новую запись в память; update — обновить запись по memory_id; delete — удалить запись по memory_id; list — получить текущие записи памяти с их ID.",
+        },
+        content: {
+          type: "string",
+          description:
+            "Краткая и точная формулировка факта на языке пользователя (для save/update), например: 'Меня зовут Артём' или 'Любимый язык: TypeScript'.",
+        },
+        kind: {
+          type: "string",
+          enum: ["name", "preference", "tech", "project", "goal", "device", "interest", "style", "other"],
+          description: "Категория факта памяти.",
+        },
+        memory_id: {
+          type: "string",
+          description: "ID существующей записи памяти (для action='update' или 'delete').",
+        },
+        attachment_filename: {
+          type: "string",
+          description: "Имя файла из вложений текущего сообщения ИЛИ из Library, если пользователь попросил сохранить файл/отчет в память.",
+        },
+        library_id: {
+          type: "string",
+          description: "ID файла из Library (из search_and_read_library или каталога USER LIBRARY CATALOG), если пользователь просит запомнить файл из Library.",
+        },
+        library_filename: {
+          type: "string",
+          description: "Имя файла из Library, если пользователь просит запомнить файл из Library.",
+        },
+      },
+      required: ["action"],
     },
   },
 };
@@ -391,7 +494,6 @@ type WebImageResult = {
 async function searchWebImages(query: string): Promise<WebImageResult[]> {
   const results: WebImageResult[] = [];
 
-  // 1. Try DuckDuckGo Images
   try {
     const htmlRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`, {
       headers: {
@@ -428,10 +530,8 @@ async function searchWebImages(query: string): Promise<WebImageResult[]> {
       }
     }
   } catch {
-    /* ignore and try fallback */
   }
 
-  // 2. Fallback: Wikimedia Commons search
   if (results.length === 0) {
     try {
       const wikiUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&prop=imageinfo&iiprop=url|mime&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=5&format=json&origin=*`;
@@ -453,7 +553,6 @@ async function searchWebImages(query: string): Promise<WebImageResult[]> {
         }
       }
     } catch {
-      /* ignore */
     }
   }
 
@@ -468,8 +567,6 @@ type GeneratedImage = {
   dataUrl: string;
 };
 
-// --- Vision: извлечение прикреплённых изображений из текста сообщений ---
-// Клиент вставляет картинки как markdown с data-URL: ![name](data:image/png;base64,...)
 const DATA_URL_RE = /!\[[^\]]*\]\((data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+)\)/g;
 const IGFILE_TAG_RE = /<!--\/?IGFILE(?::[^>]*)?-->/g;
 
@@ -477,7 +574,6 @@ function cleanFileWrappers(text: string): string {
   return text.replace(IGFILE_TAG_RE, "").trim();
 }
 
-/** Текст сообщения без base64-картинок — для фильтров, памяти и чувствительных тем. */
 function stripImageDataUrls(text: string): string {
   return cleanFileWrappers(text).replace(DATA_URL_RE, "[прикреплённое изображение]").trim();
 }
@@ -523,27 +619,35 @@ type ApiContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
 
-/**
- * Превращает сообщения в формат DeepSeek: последние сообщение пользователя
- * с прикреплёнными картинками уходит мультимодальным (text + image_url parts),
- * а из старых сообщений истории изображения вырезаются, чтобы не раздувать токены.
- */
 function toApiMessages(
-  messages: Array<{ role: string; content: string | null }>,
-): Array<{ role: string; content: string | ApiContentPart[] }> {
-  // Индексы сообщений пользователя с картинками: храним в запросе последние 3,
-  // чтобы модель помнила фото и на follow-up вопросы («а что в левом углу?»).
+  messages: ChatMessage[],
+): Array<Record<string, unknown>> {
   const userImgIndexes = messages
     .map((m, i) => (m.role === "user" && typeof m.content === "string" && m.content.includes("data:image/") ? i : -1))
     .filter((i) => i >= 0);
   const keepImageSet = new Set(userImgIndexes.slice(-3));
 
   return messages.map((m, index) => {
+    if (m.role === "tool") {
+      return {
+        role: "tool",
+        tool_call_id: m.tool_call_id,
+        content: typeof m.content === "string" ? m.content : "",
+      };
+    }
+    if (m.role === "assistant") {
+      const out: Record<string, unknown> = {
+        role: "assistant",
+        content: typeof m.content === "string" ? cleanFileWrappers(m.content) : (m.content ?? ""),
+      };
+      if (m.reasoning_content !== undefined) out.reasoning_content = m.reasoning_content;
+      if (m.tool_calls && m.tool_calls.length > 0) out.tool_calls = m.tool_calls;
+      return out;
+    }
     if (m.role !== "user" || typeof m.content !== "string" || !m.content.includes("data:image/")) {
       return { role: m.role, content: typeof m.content === "string" ? cleanFileWrappers(m.content) : (m.content ?? "") };
     }
 
-    // Старые изображения сверх лимита вырезаем, чтобы не раздувать токены.
     if (!keepImageSet.has(index)) {
       return { role: m.role, content: stripImageDataUrls(m.content) };
     }
@@ -561,7 +665,6 @@ function toApiMessages(
     }
     const tail = cleanFileWrappers(m.content.slice(cursor));
     if (tail) parts.push({ type: "text", text: tail });
-    // DeepSeek требует хотя бы один текстовый part рядом с изображением.
     if (!parts.some((p) => p.type === "text")) {
       parts.unshift({ type: "text", text: "(пользователь прикрепил изображение — проанализируй его)" });
     }
@@ -572,15 +675,11 @@ function toApiMessages(
   });
 }
 
-// Генерация изображений: GPT Image 2 (openai/gpt-image-2) через APIMIRA.
 async function generateImage(prompt: string): Promise<string> {
   const res = await generateImageWithGptImage2(prompt);
   return res.dataUrl;
 }
 
-// Стриминг fallback-ответа через Pollinations (OpenAI-совместимый /v1/chat/completions).
-// Используется ТОЛЬКО для тем, которые базовая модель цензурирует (Тяньаньмэнь,
-// независимость Тайваня, Синьцзян и т.п.). Никаких инструментов — просто текст.
 const FALLBACK_MODEL = "openai/gpt-5.4-nano";
 
 async function streamFallbackToClient(
@@ -635,32 +734,25 @@ async function streamFallbackToClient(
           send("delta", JSON.stringify(delta));
         }
       } catch {
-        // ignore
       }
     }
   }
   return assistantText;
 }
 
-
-
 type HfTool = {
   type: "function";
   function: { name: string; description: string; parameters: unknown };
 };
 
-// Официальный IGseek API.
-const PRIMARY_CHAT_MODEL = "deepseek-chat";       // IGseek-V3, поддерживает tools
-const REASONER_MODEL = "deepseek-reasoner"; // IGseek-R1, reasoning_content
+const INSTINCT_MODEL = "deepseek-v4-flash";
+const REASONER_MODEL = "deepseek-reasoner";
 
-// UI-модели → параметры вызова IGseek.
-// Публичный API отдаёт только chat / reasoner,
-// поэтому вариации между «Pro / Chat / Flash» задаём через temperature и top_p.
 type UiModel = "instinct" | "chat" | "f1";
 const MODEL_PROFILES: Record<UiModel, { model: string; temperature: number; top_p: number }> = {
-  instinct: { model: PRIMARY_CHAT_MODEL, temperature: 0.8, top_p: 0.95 }, // v4 pro
-  chat:     { model: PRIMARY_CHAT_MODEL, temperature: 1.1, top_p: 0.95 }, // chat
-  f1:       { model: PRIMARY_CHAT_MODEL, temperature: 0.4, top_p: 0.9 },  // v4 flash
+  instinct: { model: INSTINCT_MODEL, temperature: 0.8, top_p: 0.95 },
+  chat:     { model: "deepseek-chat", temperature: 1.1, top_p: 0.95 },
+  f1:       { model: "deepseek-coder", temperature: 0.4, top_p: 0.9 },
 };
 
 async function callPrimary(
@@ -689,17 +781,14 @@ async function callPrimary(
   });
 }
 
-
-
 export async function handleChatPost(request: Request): Promise<Response> {
-  const apiKey = process.env.DEEPSEEK_API_KEY || "sk-39c4bfbe3e164ae3945f56382f8fb94f";
+  const apiKey = process.env.DEEPSEEK_API_KEY || "sk-f9e947f21f0246ad9b524a3a5c86a8b2";
   if (!apiKey) {
     return new Response(JSON.stringify({ error: "Server not configured" }), {
       status: 500,
       headers: { "content-type": "application/json" },
     });
   }
-
 
         let parsed: z.infer<typeof BodySchema>;
         try {
@@ -720,21 +809,16 @@ export async function handleChatPost(request: Request): Promise<Response> {
           .filter(Boolean);
         const cleanMessages = parsed.messages.filter((m) => m.role !== "system");
 
-        // Long-term memory: identify user via bearer token, load relevant memories.
         const authHeader = request.headers.get("authorization") ?? "";
         const token = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7) : "";
         const authed = token ? await getUserFromToken(token) : null;
         const photoQuotaActorKey = resolvePhotoQuotaActorKey(request, authed?.id, parsed.deviceFp);
         let currentImageQuotaHint = parsed.imageQuota;
 
-        // Текст последнего сообщения без base64-картинок — для фильтров и памяти.
         const lastUserMessage = stripImageDataUrls(
           [...cleanMessages].reverse().find((m) => m.role === "user")?.content ?? "",
         );
 
-        // Fallback is a one-turn fallback only. Keep its sensitive user/assistant pairs
-        // out of later primary requests so fallback answer cannot affect the model's
-        // behavior on an unrelated follow-up.
         const primaryHistory = cleanMessages.filter((message, index, messages) => {
           if (message.role === "user" && isChinaSensitive(stripImageDataUrls(message.content))) return false;
           if (message.role !== "assistant") return true;
@@ -746,7 +830,6 @@ export async function handleChatPost(request: Request): Promise<Response> {
           return true;
         });
 
-        // Content filters — блокируем террор/оружие ДО обращения к модели.
         const preCheck = checkContent(lastUserMessage);
         if (preCheck.blocked) {
           const refusal = refusalMessage(preCheck.category, "ru");
@@ -770,11 +853,15 @@ export async function handleChatPost(request: Request): Promise<Response> {
           });
         }
 
-
         let memories: MemoryRow[] = [];
         if (authed && lastUserMessage) {
-          memories = await loadRelevantMemories(authed.client, authed.id, lastUserMessage, 8);
+          memories = await loadRelevantMemories(authed.client, authed.id, lastUserMessage, 12, authed.token);
         }
+
+        const libraryItems: ServerLibraryItem[] = await listAllLibraryFilesServer(
+          authed,
+          parsed.libraryFiles || [],
+        ).catch(() => []);
 
         const memoryBlock = memories.length
           ? `\n\nUSER LONG-TERM MEMORY (relevant facts and attachments remembered from previous conversations — treat as trusted context, refer to naturally, do not mention IDs):\n${memories
@@ -788,6 +875,16 @@ export async function handleChatPost(request: Request): Promise<Response> {
               .join("\n")}`
           : "";
 
+        const libraryCatalogBlock = libraryItems.length
+          ? `\n\nUSER LIBRARY CATALOG (files, documents, reports, Flow artifacts & images currently available in the shared Library — use search_and_read_library to read full content):\n${libraryItems
+              .slice(0, 25)
+              .map((item) => {
+                const txt = extractLibraryText(item).slice(0, 140).replace(/\s+/g, " ").trim();
+                return `- [lib_id:${item.id}] "${item.name}" (${item.type}, source: ${item.source}${item.chatTitle ? `, from: ${item.chatTitle}` : ""}${txt ? `, preview: "${txt}"` : ""})`;
+              })
+              .join("\n")}`
+          : "\n\nUSER LIBRARY CATALOG: (Library is currently empty or user hasn't added files yet — you can still call search_and_read_library if user asks to check Library).";
+
         const userAttachmentsBlock = parsed.userAttachments?.length
           ? `\n\nUSER ATTACHMENTS IN THIS MESSAGE (files/documents attached directly by the user):\n${parsed.userAttachments
               .map((a, i) => `- [attachment_${i + 1}] "${a.name}" (${a.type || "file"})`)
@@ -796,24 +893,27 @@ export async function handleChatPost(request: Request): Promise<Response> {
 
         const gmailStatusInfo = parsed.gmailConnected
           ? "Gmail status: User is authenticated. You can freely read, search, draft, or send emails with attachments via manage_gmail."
-          : "Gmail status: User is NOT yet signed into Gmail. When the user asks anything about email, ALWAYS call manage_gmail — the client interface will instantly display a Google sign-in modal for the user, after which your email action will be executed.";
+          : "Gmail status: User is NOT yet signed into Gmail. When the user asks anything about email, ALWAYS call manage_gmail — the client interface will instantly display a Google sign-in modal for the user, after which your email action will be executed WITH any resolved attachments.";
 
         const capabilities = `You have full autonomy to decide when to call tools. The user does not need to choose tools manually.
 ${gmailStatusInfo}
 Tools available to you:
-- search_and_read_memory: прочитать память пользователя или вложения в памяти (документы, файлы, контакты мамы/босса/коллег, отчеты). Используй, когда нужно найти контакты или изучить файл из памяти.
-- manage_gmail: search, read, compose, or send emails via Gmail. ALWAYS call this tool whenever the user asks to send an email, draft an email, read inbox, or search messages! The client handles Google authentication automatically.
+- search_and_read_library: найти и прочитать полное содержимое файла/отчёта/кода/изображения из единой Библиотеки (Library). ВСЕГДА вызывай этот инструмент, когда пользователь упоминает, что файл лежит в Library / библиотеке ("возьми мой отчёт из library", "отправь отчёт который лежит в library", "прочитай документ из library").
+- manage_memory: сохранить, обновить или удалить факт/заметку/файл в долговременной памяти пользователя (Memory HUD). ВСЕГДА вызывай manage_memory (action: "save" / "update" / "delete"), когда пользователь просит что-то запомнить/сохранить/забыть или сам сообщает важные долгосрочные факты о себе (имя, контакты, предпочтения, стек, проекты, цели, привычки).
+  * Если пользователь просит запомнить файл из Library ("возьми мой отчёт из library и запомни его"): 1) сначала вызови search_and_read_library чтобы прочитать его текст, 2) затем вызови manage_memory (action: "save") с подробным изложением ключевых данных в content И передай library_id / library_filename (чтобы сам файл тоже сохранился как вложение в Memory HUD!). После вызова подтверди пользователю, что данные и файл сохранены в память.
+- search_and_read_memory: прочитать память пользователя или вложения в памяти (документы, файлы, контакты мамы/босса/коллег, отчеты). Используй, когда нужно найти контакты ("мой босс", "мама") или изучить файл из памяти.
+- manage_gmail: search, read, compose, or send emails via Gmail. ALWAYS call this tool whenever the user asks to send an email, draft an email, read inbox, or search messages — EVEN IF Gmail is not signed in yet (the UI will open the Gmail sign-in modal with your prepared email and attachments and automatically send it right after sign-in!).
   ВЛОЖЕНИЯ В ПИСЬМА:
-  1) Сгенерированные открытки/изображения: когда пользователь просит "сгенерируй открытку с днем рождения и отправь её моей маме" — сначала вызови generate_image с детальным промптом открытки (для Gemini/генератора), затем manage_gmail с to: email мамы из памяти, поздравлением и attachments: [{ filename: "birthday_card.png", source: "generated_image" }].
-  2) Файлы от пользователя: когда пользователь прикрепил файл и говорит "Отправь моему боссу отчет" — найди email босса в памяти (или спроси), вызови manage_gmail с to: email босса, темой и attachments: [{ filename: "<имя файла>", source: "user_upload" }].
-  3) Файлы из памяти: attachments: [{ filename: "<имя файла>", source: "memory", memory_id: "<id>" }].
+  1) Файлы из Library ("отправь моему боссу отчёт, он лежит в library"): найди email получателя в памяти (search_and_read_memory), найди файл в Library (search_and_read_library), затем вызови manage_gmail с action: "send", to: email получателя, subject, содержательным body и attachments: [{ filename: "<имя файла>", source: "library", library_id: "<lib_id>" }].
+  2) Сгенерированные открытки/изображения: сначала вызови generate_image, затем manage_gmail с attachments: [{ filename: "birthday_card.png", source: "generated_image" }].
+  3) Файлы от пользователя в текущем сообщении: attachments: [{ filename: "<имя файла>", source: "user_upload" }].
+  4) Файлы из памяти: attachments: [{ filename: "<имя файла>", source: "memory", memory_id: "<id>" }].
 - generate_image: генерация картинок и открыток (мост с Gemini Image). DeepSeek формулирует детальный визуальный промпт на английском, который генерируется прямо в чате карточкой и может быть отправлен по почте!
 - refuse_unsupported_request: ЧЕСТНЫЙ ОТКАЗ И ГРАНИЦЫ ВОЗМОЖНОСТЕЙ. Используй этот инструмент НЕМЕДЛЕННО, если пользователь просит сделать то, что ты физически или технически НЕ УМЕЕШЬ (например: реальные телефонные звонки по сотовой связи, SMS с SIM-карты, банковские переводы денег, физические действия в материальном мире, живой взлом закрытых серверов, управление домашней техникой без интеграций, публикации в чужие соцсети без API). Не фантазируй и не притворяйся, что сделал невозможное — сразу вызывай refuse_unsupported_request и честно скажи об этом, предложив конструктивную альтернативу (написать код, скрипт, текст, найти инфу, создать задачу/напоминание).
-- suggest_tab_transition: ИНСТРУМЕНТ ПЕРЕХОДА В ДРУГУЮ ВКЛАДКУ (Engine, Flow, Library). Вызывай этот инструмент ВСЕГДА, когда пользователь в обычном чате просит:
-  1) Создать full stack проект, многофайловое веб-приложение, запустить живое превью кода, открыть среду разработки или IDE -> target_tab: "engine". Объясни: "В обычном чате код выводится текстом без сборки, а во вкладке Engine доступна полноценная среда разработки с файловым деревом, зависимостями и live preview."
-  2) Выложить код на GitHub, запустить CI/CD, выполнить bash-команды/терминал, настроить мониторинг или автономный сценарий -> target_tab: "flow". Объясни: "Обычный чат не имеет прямого терминала и OAuth-доступа к репозиториям GitHub. Для работы с GitHub, терминалом и многоэтапными процессами перейдите во вкладку Flow."
-  3) Посмотреть/организовать все файлы, вложения и документы -> target_tab: "library".
-  В тексте ответа ОБЯЗАТЕЛЬНО объясни границы возможностей базового текстового чата, почему задачу эффективнее выполнять в этой специализированной вкладке, и предложи пользователю нажать на появившуюся кнопку перехода!
+- suggest_tab_transition: ИНСТРУМЕНТ ПЕРЕХОДА В ДРУГУЮ ВКЛАДКУ (Engine, Flow, Library). Вызывай этот инструмент ТОЛЬКО когда пользователь просит именно открыть/перейти во вкладку или создать полноценный UI-проект/CI-CD:
+  1) Создать full stack проект, многофайловое веб-приложение, запустить живое превью кода, открыть IDE -> target_tab: "engine".
+  2) Выложить код на GitHub, запустить CI/CD, выполнить bash-команды/терминал, настроить мониторинг или автономный сценарий -> target_tab: "flow".
+  3) Если пользователь просит просто ПОКАЗАТЬ интерфейс всех файлов / открыть раздел Library -> target_tab: "library". ВАЖНО: если пользователь просит ПРОЧИТАТЬ файл из Library, ЗАПОМНИТЬ его в память или ОТПРАВИТЬ его по почте — НЕ отправляй его во вкладку Library, а сам сразу используй search_and_read_library + manage_memory / manage_gmail прямо здесь в чате!
 - manage_calendar_event: create, list, update or delete events/reminders in Google Calendar. Call this tool whenever the user asks to schedule a meeting, set a reminder, check schedule or manage calendar events.
 - manage_google_task: create, list, complete or update tasks in Google Tasks. Call this tool whenever the user asks to add a task, check todo list, mark a task done or manage tasks.
 - create_artifact: create a downloadable file card (code, HTML, markdown, document, config). Use it for substantial code or documents.
@@ -828,7 +928,7 @@ Routing rules — decide automatically, never ask the user which engine to use:
 - Text answers, analysis, code, search: you answer directly.
 - Diagrams/Schemas/Flowcharts: write a \`\`\`mermaid code block directly in your text answer.
 - Real photos / images: call find_web_image when requested or appropriate.
-- Calendar, Tasks, Gmail integrations: ALWAYS call manage_calendar_event, manage_google_task, or manage_gmail autonomously as needed to fulfill user requests directly in the chat!
+- Calendar, Tasks, Gmail, Library, Memory integrations: ALWAYS call manage_calendar_event, manage_google_task, manage_gmail, search_and_read_library, search_and_read_memory, and manage_memory autonomously as needed to fulfill user requests directly in the chat!
 - Photos or screenshots ATTACHED by the user:
   * If the user asks what is on the image or asks to analyze it: analyze the image content yourself and answer; do not call generate_image.
   * If the user asks to EDIT, MODIFY, ADD something to, REMOVE something from, retouch, or restyle an attached or previously generated image (e.g., "добавь усы", "приклей очки", "измени фон", "сделай в стиле аниме"): ALWAYS call edit_image immediately with a clear English edit instruction! NEVER refuse or claim you cannot edit photos!
@@ -846,16 +946,15 @@ After using a tool, briefly confirm what was created or executed and do not repe
         const systemMessage: ChatMessage = {
           role: "system",
           content: isEngineRequest
-            ? `${effectiveSystemCore}${engineContextBlock}${memoryBlock}${userAttachmentsBlock}`
-            : `${effectiveSystemCore}\n\n${capabilities}${memoryBlock}${userAttachmentsBlock}`,
+            ? `${effectiveSystemCore}${engineContextBlock}${memoryBlock}${libraryCatalogBlock}${userAttachmentsBlock}`
+            : `${effectiveSystemCore}\n\n${capabilities}${memoryBlock}${libraryCatalogBlock}${userAttachmentsBlock}`,
         };
         const baseMessages: ChatMessage[] = [
           systemMessage,
           ...primaryHistory.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
         ];
 
-
-        const supportsTools = !effectiveReasoning && !isEngineRequest;
+        const supportsTools = !isEngineRequest;
         const activeTools = supportsTools
           ? [
               ARTIFACT_TOOL,
@@ -865,6 +964,8 @@ After using a tool, briefly confirm what was created or executed and do not repe
               CALENDAR_TOOL,
               TASKS_TOOL,
               GMAIL_TOOL,
+              SEARCH_AND_READ_LIBRARY_TOOL,
+              MANAGE_MEMORY_TOOL,
               MEMORY_TOOL,
               REFUSAL_TOOL,
               TAB_TRANSITION_TOOL,
@@ -893,7 +994,6 @@ After using a tool, briefly confirm what was created or executed and do not repe
               try {
                 controller.close();
               } catch {
-                /* already closed */
               }
             };
 
@@ -901,6 +1001,7 @@ After using a tool, briefly confirm what was created or executed and do not repe
               finishReason: string | null;
               toolCalls: ToolCall[];
               assistantText: string;
+              reasoningText: string;
             };
 
             async function runStream(
@@ -927,6 +1028,7 @@ After using a tool, briefly confirm what was created or executed and do not repe
               const toolAcc = new Map<number, { id: string; name: string; args: string }>();
               let finishReason: string | null = null;
               let assistantText = "";
+              let reasoningText = "";
 
               while (true) {
                 const { done, value } = await reader.read();
@@ -957,8 +1059,11 @@ After using a tool, briefly confirm what was created or executed and do not repe
                     const choice = json.choices?.[0];
                     const delta = choice?.delta;
                     if (choice?.finish_reason) finishReason = choice.finish_reason;
-                    if (delta?.reasoning_content && forwardText) {
-                      send("reasoning", JSON.stringify(delta.reasoning_content));
+                    if (delta?.reasoning_content) {
+                      reasoningText += delta.reasoning_content;
+                      if (forwardText && effectiveReasoning) {
+                        send("reasoning", JSON.stringify(delta.reasoning_content));
+                      }
                     }
                     if (delta?.content) {
                       assistantText += delta.content;
@@ -974,7 +1079,6 @@ After using a tool, briefly confirm what was created or executed and do not repe
                       }
                     }
                   } catch {
-                    // ignore malformed chunk
                   }
                 }
               }
@@ -987,10 +1091,11 @@ After using a tool, briefly confirm what was created or executed and do not repe
                   function: { name: v.name, arguments: v.args },
                 }));
 
-              return { finishReason, toolCalls, assistantText };
+              return { finishReason, toolCalls, assistantText, reasoningText };
             }
 
             let finalAssistantText = "";
+            let memoryMutatedInTool = false;
             let hitImageLimit = false;
             let lastGeneratedImageDataUrl: string | null =
               parsed.previousGeneratedImage?.dataUrl?.startsWith("data:image/")
@@ -1006,9 +1111,6 @@ After using a tool, briefly confirm what was created or executed and do not repe
                 : null;
 
             try {
-              // Темы, которые базовая модель цензурирует (Тяньаньмэнь, независимость
-              // Тайваня, Синьцзян и т.д.) → маршрутизируем на fallback-модель.
-              // Никаких инструментов, только текстовый ответ.
               if (isChinaSensitive(lastUserMessage)) {
                 const custom = getCustomGlobalPromptForWorkspace(parsed.workspace);
                 const customDirective = custom ? `${custom}\n\n` : "";
@@ -1022,37 +1124,45 @@ After using a tool, briefly confirm what was created or executed and do not repe
                 ];
                 finalAssistantText = await streamFallbackToClient(fallbackMessages, send);
                 if (authed && lastUserMessage) {
-                  const userIdForMemory = authed.id;
-                  const clientForMemory = authed.client;
-                  queueMicrotask(() => {
-                    analyzeAndUpdateMemory(clientForMemory, userIdForMemory, lastUserMessage, finalAssistantText)
-                      .then((changed) => { if (changed) send("memory_updated", "1"); })
-                      .catch((e) => console.error("memory analyze error", e))
-                      .finally(() => { safeClose(); });
-                  });
-                  send("done", "1");
-                } else {
-                  send("done", "1");
-                  safeClose();
+                  try {
+                    const changed = await Promise.race([
+                      analyzeAndUpdateMemory(
+                        authed.client,
+                        authed.id,
+                        lastUserMessage,
+                        finalAssistantText,
+                        authed.token,
+                      ),
+                      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 6000)),
+                    ]);
+                    if (changed) send("memory_updated", "1");
+                  } catch (e) {
+                    console.error("memory analyze error", e);
+                  }
                 }
+                send("done", "1");
+                safeClose();
                 return;
               }
 
-              // Первый проход — с инструментами, но текст форвардим сразу.
-              const first = await runStream(baseMessages, activeTools, true);
-              finalAssistantText = first.assistantText;
+              let conversationMessages: ChatMessage[] = [...baseMessages];
+              let currentOutcome = await runStream(conversationMessages, activeTools, true);
+              finalAssistantText = currentOutcome.assistantText;
 
-              if (first.finishReason === "tool_calls" && first.toolCalls.length > 0) {
+              let toolRound = 0;
+              while (currentOutcome.finishReason === "tool_calls" && currentOutcome.toolCalls.length > 0 && toolRound < 4) {
+                toolRound += 1;
                 const followupMessages: ChatMessage[] = [
-                  ...baseMessages,
+                  ...conversationMessages,
                   {
                     role: "assistant",
-                    content: first.assistantText || null,
-                    tool_calls: first.toolCalls,
+                    content: currentOutcome.assistantText || null,
+                    ...(currentOutcome.reasoningText ? { reasoning_content: currentOutcome.reasoningText } : {}),
+                    tool_calls: currentOutcome.toolCalls,
                   },
                 ];
 
-                for (const tc of first.toolCalls) {
+                for (const tc of currentOutcome.toolCalls) {
                   if (tc.function.name === "create_artifact") {
                     try {
                       const parsedArgs = JSON.parse(tc.function.arguments) as {
@@ -1379,9 +1489,10 @@ After using a tool, briefly confirm what was created or executed and do not repe
                         query?: string;
                         attachments?: Array<{
                           filename?: string;
-                          source?: "generated_image" | "user_upload" | "memory";
+                          source?: "generated_image" | "user_upload" | "memory" | "library";
                           data_url?: string;
                           memory_id?: string;
+                          library_id?: string;
                         }>;
                       };
 
@@ -1391,12 +1502,27 @@ After using a tool, briefly confirm what was created or executed and do not repe
                         for (const att of parsedArgs.attachments) {
                           let dataUrl = att.data_url;
                           let filename = att.filename || "attachment";
+                          let mimeOverride: string | undefined;
 
                           if (!dataUrl && (att.source === "generated_image" || filename.includes("card") || filename.includes("image") || filename.includes("открытк")) && lastGeneratedImageDataUrl) {
                             dataUrl = lastGeneratedImageDataUrl;
                           }
 
-                          if (!dataUrl && parsed.userAttachments?.length) {
+                          if (!dataUrl && (att.source === "library" || att.library_id) && libraryItems.length > 0) {
+                            const matches = findLibraryFiles(libraryItems, {
+                              id: att.library_id,
+                              filename: att.filename,
+                              query: att.filename,
+                            });
+                            const libMatch = matches[0];
+                            if (libMatch) {
+                              dataUrl = libraryItemToBase64DataUrl(libMatch);
+                              filename = libMatch.name;
+                              mimeOverride = libMatch.mimeType;
+                            }
+                          }
+
+                          if (!dataUrl && parsed.userAttachments?.length && att.source !== "library" && att.source !== "memory") {
                             const match = parsed.userAttachments.find((ua) => ua.name.toLowerCase() === filename.toLowerCase()) || parsed.userAttachments[0];
                             if (match) {
                               dataUrl = match.dataUrl;
@@ -1405,16 +1531,41 @@ After using a tool, briefly confirm what was created or executed and do not repe
                           }
 
                           if (!dataUrl && authed && att.memory_id) {
-                            const targetMem = memories.find((m) => m.id === att.memory_id);
+                            let targetMem = memories.find((m) => m.id === att.memory_id);
+                            if (!targetMem) {
+                              const freshAll = await listAllMemories(authed.client, authed.id, authed.token).catch(() => []);
+                              targetMem = freshAll.find((m) => m.id === att.memory_id);
+                            }
                             if (targetMem?.attachment?.dataUrl) {
                               dataUrl = targetMem.attachment.dataUrl;
                               filename = targetMem.attachment.name;
+                            } else if (targetMem?.attachment?.textContent) {
+                              dataUrl = `data:text/plain;base64,${Buffer.from(targetMem.attachment.textContent, "utf-8").toString("base64")}`;
+                              filename = targetMem.attachment.name;
+                              mimeOverride = targetMem.attachment.type;
+                            }
+                          }
+
+                          if (!dataUrl && libraryItems.length > 0) {
+                            const fallbackLib = findLibraryFiles(libraryItems, {
+                              id: att.library_id,
+                              filename: att.filename,
+                              query: att.filename,
+                            })[0];
+                            if (fallbackLib) {
+                              dataUrl = libraryItemToBase64DataUrl(fallbackLib);
+                              filename = fallbackLib.name;
+                              mimeOverride = fallbackLib.mimeType;
                             }
                           }
 
                           if (dataUrl) {
                             const mimeMatch = dataUrl.match(/^data:([^;]+);/);
-                            resolvedAttachments.push({ filename, mimeType: mimeMatch ? mimeMatch[1] : undefined, dataUrl });
+                            resolvedAttachments.push({
+                              filename,
+                              mimeType: mimeOverride || (mimeMatch ? mimeMatch[1] : undefined),
+                              dataUrl,
+                            });
                           }
                         }
                       } else if (lastGeneratedImageDataUrl && (lastUserMessage.toLowerCase().includes("отправ") || lastUserMessage.toLowerCase().includes("send")) && (lastUserMessage.toLowerCase().includes("открытк") || lastUserMessage.toLowerCase().includes("фото") || lastUserMessage.toLowerCase().includes("картинк") || lastUserMessage.toLowerCase().includes("карточк"))) {
@@ -1431,6 +1582,22 @@ After using a tool, briefly confirm what was created or executed and do not repe
                             mimeType: mimeMatch ? mimeMatch[1] : undefined,
                             dataUrl: ua.dataUrl,
                           });
+                        }
+                      } else if (
+                        libraryItems.length > 0 &&
+                        (parsedArgs.action || "send") === "send" &&
+                        /(library|библиотек|отч[её]т|report|файл|документ)/i.test(lastUserMessage)
+                      ) {
+                        const libMatch = findLibraryFiles(libraryItems, { query: lastUserMessage })[0];
+                        if (libMatch) {
+                          const dataUrl = libraryItemToBase64DataUrl(libMatch);
+                          if (dataUrl) {
+                            resolvedAttachments.push({
+                              filename: libMatch.name,
+                              mimeType: libMatch.mimeType,
+                              dataUrl,
+                            });
+                          }
                         }
                       }
 
@@ -1452,7 +1619,7 @@ After using a tool, briefly confirm what was created or executed and do not repe
                           ok: true,
                           action: gmailPayload.action,
                           gmail: gmailPayload,
-                          message: `Интеграция Gmail (${gmailPayload.action}) передана в клиентский интерфейс почты и отображена карточкой.${resolvedAttachments.length ? ` Вложено файлов: ${resolvedAttachments.map((a) => a.filename).join(", ")}.` : ""}`,
+                          message: `Интеграция Gmail (${gmailPayload.action}) передана в клиентский интерфейс почты.${resolvedAttachments.length ? ` Вложено файлов: ${resolvedAttachments.map((a) => a.filename).join(", ")}.` : ""}${!parsed.gmailConnected ? " Пользователь еще не вошел в Gmail — интерфейс сразу откроет окно входа в Gmail и автоматически отправит письмо с вложением сразу после авторизации." : ""}`,
                         }),
                       });
                     } catch (e) {
@@ -1462,12 +1629,238 @@ After using a tool, briefly confirm what was created or executed and do not repe
                         content: JSON.stringify({ ok: false, error: (e as Error).message }),
                       });
                     }
+                  } else if (tc.function.name === "search_and_read_library") {
+                    try {
+                      const parsedArgs = JSON.parse(tc.function.arguments || "{}") as {
+                        query?: string;
+                        library_id?: string;
+                        filename?: string;
+                      };
+                      const matches = findLibraryFiles(libraryItems, {
+                        id: parsedArgs.library_id,
+                        filename: parsedArgs.filename,
+                        query: parsedArgs.query || lastUserMessage,
+                      });
+                      const filesOut = matches.slice(0, 8).map((item) => {
+                        const text = extractLibraryText(item);
+                        return {
+                          id: item.id,
+                          name: item.name,
+                          type: item.type,
+                          mimeType: item.mimeType,
+                          source: item.source,
+                          chatTitle: item.chatTitle,
+                          updatedAt: item.updatedAt,
+                          textContent: text ? text.slice(0, 24_000) : "(бинарный файл или изображение без текстового содержимого)",
+                          hasBinaryData: Boolean(item.dataUrl),
+                        };
+                      });
+                      followupMessages.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: JSON.stringify({
+                          ok: true,
+                          total_in_library: libraryItems.length,
+                          count: filesOut.length,
+                          files: filesOut,
+                          message: filesOut.length
+                            ? `Найдено файлов в Library: ${filesOut.length}. Используй их содержимое и id (library_id) для ответа, сохранения в память (manage_memory) или отправки через Gmail (manage_gmail с source: "library").`
+                            : "Подходящие файлы в Library не найдены. Сообщи об этом пользователю честно.",
+                        }),
+                      });
+                    } catch (e) {
+                      followupMessages.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: JSON.stringify({ ok: false, error: (e as Error).message }),
+                      });
+                    }
+                  } else if (tc.function.name === "manage_memory") {
+                    try {
+                      if (!authed) {
+                        followupMessages.push({
+                          role: "tool",
+                          tool_call_id: tc.id,
+                          content: JSON.stringify({
+                            ok: false,
+                            error: "unauthorized",
+                            message: "Пользователь не авторизован в облачном аккаунте, поэтому сохранить запись в облачную память нельзя.",
+                          }),
+                        });
+                        continue;
+                      }
+                      const parsedArgs = JSON.parse(tc.function.arguments || "{}") as {
+                        action?: "save" | "update" | "delete" | "list";
+                        content?: string;
+                        kind?: string;
+                        memory_id?: string;
+                        attachment_filename?: string;
+                        library_id?: string;
+                        library_filename?: string;
+                      };
+                      const action = parsedArgs.action || "save";
+                      if (action === "list") {
+                        const all = await listAllMemories(authed.client, authed.id, authed.token);
+                        followupMessages.push({
+                          role: "tool",
+                          tool_call_id: tc.id,
+                          content: JSON.stringify({
+                            ok: true,
+                            count: all.length,
+                            memories: all.slice(0, 40).map((m) => ({
+                              id: m.id,
+                              kind: m.kind,
+                              content: m.content,
+                              hasAttachment: Boolean(m.attachment),
+                            })),
+                          }),
+                        });
+                      } else if (action === "delete") {
+                        if (!parsedArgs.memory_id) {
+                          throw new Error("missing memory_id for delete");
+                        }
+                        await deleteMemory(authed.token, parsedArgs.memory_id);
+                        memoryMutatedInTool = true;
+                        send("memory_updated", "1");
+                        followupMessages.push({
+                          role: "tool",
+                          tool_call_id: tc.id,
+                          content: JSON.stringify({
+                            ok: true,
+                            deleted_id: parsedArgs.memory_id,
+                            message: "Запись удалена из памяти пользователя.",
+                          }),
+                        });
+                      } else if (action === "update") {
+                        if (!parsedArgs.memory_id || !parsedArgs.content?.trim()) {
+                          throw new Error("missing memory_id or content for update");
+                        }
+                        const updated = await updateMemory(authed.id, authed.token, parsedArgs.memory_id, {
+                          content: parsedArgs.content.trim(),
+                          kind: parsedArgs.kind,
+                        });
+                        memoryMutatedInTool = true;
+                        send("memory_updated", "1");
+                        followupMessages.push({
+                          role: "tool",
+                          tool_call_id: tc.id,
+                          content: JSON.stringify({
+                            ok: true,
+                            memory: { id: updated.id, content: updated.content, kind: updated.kind },
+                            message: `Запись памяти обновлена: «${updated.content}».`,
+                          }),
+                        });
+                      } else {
+                        let attachmentToSave: MemoryAttachment | undefined;
+                        if (parsedArgs.library_id || parsedArgs.library_filename || (parsedArgs.attachment_filename && !parsed.userAttachments?.length)) {
+                          const libMatch = findLibraryFiles(libraryItems, {
+                            id: parsedArgs.library_id,
+                            filename: parsedArgs.library_filename || parsedArgs.attachment_filename,
+                            query: parsedArgs.library_filename || parsedArgs.attachment_filename || lastUserMessage,
+                          })[0];
+                          if (libMatch) {
+                            const textContent = extractLibraryText(libMatch).slice(0, 24_000);
+                            const safeB64 = libraryItemToBase64DataUrl(libMatch);
+                            attachmentToSave = {
+                              name: libMatch.name,
+                              type: libMatch.mimeType || "text/plain",
+                              ...(safeB64 && safeB64.length <= 750_000 ? { dataUrl: safeB64 } : {}),
+                              ...(textContent ? { textContent } : {}),
+                            };
+                          }
+                        }
+
+                        if (!attachmentToSave && (parsedArgs.attachment_filename || (parsed.userAttachments?.length && !parsedArgs.content?.trim()))) {
+                          const targetName = (parsedArgs.attachment_filename || "").toLowerCase();
+                          const ua =
+                            parsed.userAttachments?.find((a) => a.name.toLowerCase() === targetName) ||
+                            parsed.userAttachments?.[0];
+                          if (ua) {
+                            const mime = ua.type || (ua.dataUrl.startsWith("data:") ? ua.dataUrl.slice(5, ua.dataUrl.indexOf(";")) : "application/octet-stream");
+                            let textContent: string | undefined;
+                            const isTextLike =
+                              mime.startsWith("text/") ||
+                              /\.(txt|md|json|csv|js|ts|tsx|py|html|css|xml|yaml|yml|log)$/i.test(ua.name);
+                            if (isTextLike && ua.dataUrl.includes(",")) {
+                              try {
+                                const b64 = ua.dataUrl.split(",")[1] || "";
+                                textContent = Buffer.from(b64, "base64").toString("utf-8").slice(0, 24000);
+                              } catch {  }
+                            }
+                            attachmentToSave = {
+                              name: ua.name,
+                              type: mime,
+                              ...(ua.dataUrl.length <= 750_000 ? { dataUrl: ua.dataUrl } : {}),
+                              ...(textContent ? { textContent } : {}),
+                            };
+                          }
+                        }
+
+                        if (!attachmentToSave && libraryItems.length > 0 && /(library|библиотек|отч[её]т|report|файл)/i.test(lastUserMessage)) {
+                          const libMatch = findLibraryFiles(libraryItems, { query: lastUserMessage })[0];
+                          if (libMatch) {
+                            const textContent = extractLibraryText(libMatch).slice(0, 24_000);
+                            const safeB64 = libraryItemToBase64DataUrl(libMatch);
+                            attachmentToSave = {
+                              name: libMatch.name,
+                              type: libMatch.mimeType || "text/plain",
+                              ...(safeB64 && safeB64.length <= 750_000 ? { dataUrl: safeB64 } : {}),
+                              ...(textContent ? { textContent } : {}),
+                            };
+                          }
+                        }
+
+                        const contentText = (parsedArgs.content || "").trim() || (attachmentToSave ? `Файл из Library: ${attachmentToSave.name}` : "");
+                        if (!contentText) {
+                          throw new Error("missing content to save");
+                        }
+                        const existing = await listAllMemories(authed.client, authed.id, authed.token);
+                        const matchExisting = existing.find(
+                          (m) => m.content.trim().toLowerCase() === contentText.toLowerCase(),
+                        );
+                        if (matchExisting && !attachmentToSave) {
+                          followupMessages.push({
+                            role: "tool",
+                            tool_call_id: tc.id,
+                            content: JSON.stringify({
+                              ok: true,
+                              already_existed: true,
+                              memory: { id: matchExisting.id, content: matchExisting.content, kind: matchExisting.kind },
+                              message: `Эта информация уже сохранена в памяти: «${matchExisting.content}».`,
+                            }),
+                          });
+                        } else {
+                          const created = await createMemory(authed.id, authed.token, {
+                            content: contentText,
+                            kind: parsedArgs.kind || "other",
+                            ...(attachmentToSave ? { attachment: attachmentToSave } : {}),
+                          });
+                          memoryMutatedInTool = true;
+                          send("memory_updated", "1");
+                          followupMessages.push({
+                            role: "tool",
+                            tool_call_id: tc.id,
+                            content: JSON.stringify({
+                              ok: true,
+                              memory: { id: created.id, content: created.content, kind: created.kind, attachmentName: attachmentToSave?.name },
+                              message: `Сохранено в долговременную память (Memory HUD): «${created.content}»${attachmentToSave ? ` с вложением «${attachmentToSave.name}»` : ""}. Кратко подтверди пользователю.`,
+                            }),
+                          });
+                        }
+                      }
+                    } catch (e) {
+                      followupMessages.push({
+                        role: "tool",
+                        tool_call_id: tc.id,
+                        content: JSON.stringify({ ok: false, error: (e as Error).message }),
+                      });
+                    }
                   } else if (tc.function.name === "search_and_read_memory") {
                     try {
-                      const parsedArgs = JSON.parse(tc.function.arguments) as { query?: string; memory_id?: string };
+                      const parsedArgs = JSON.parse(tc.function.arguments || "{}") as { query?: string; memory_id?: string };
                       let results: MemoryRow[] = [];
                       if (authed) {
-                        const allMemories = await listAllMemories(authed.client, authed.id);
+                        const allMemories = await listAllMemories(authed.client, authed.id, authed.token);
                         if (parsedArgs.memory_id) {
                           results = allMemories.filter((m) => m.id === parsedArgs.memory_id);
                         } else if (parsedArgs.query) {
@@ -1585,38 +1978,42 @@ After using a tool, briefly confirm what was created or executed and do not repe
 
                 }
 
-                // Второй проход — без инструментов, стримим ответ модели.
+                conversationMessages = followupMessages;
                 try {
-                  const second = await runStream(followupMessages, [], true);
-                  finalAssistantText = second.assistantText || finalAssistantText;
+                  const nextTools = toolRound < 4 ? activeTools : [];
+                  currentOutcome = await runStream(conversationMessages, nextTools, true);
+                  if (currentOutcome.assistantText) {
+                    finalAssistantText = currentOutcome.assistantText;
+                  }
                 } catch (secondErr) {
-                  console.warn("Second pass streaming non-fatal fallback:", secondErr);
+                  console.warn("Followup tool streaming non-fatal fallback:", secondErr);
                   if (!finalAssistantText && lastGeneratedImageDataUrl) {
                     finalAssistantText = "Image created.";
                     send("delta", JSON.stringify(finalAssistantText));
                   }
+                  break;
                 }
               }
 
-              // Cleanly finish the SSE stream (or keep open briefly if memory update may emit)
-              if (authed && lastUserMessage) {
-                const userIdForMemory = authed.id;
-                const clientForMemory = authed.client;
-                queueMicrotask(() => {
-                  analyzeAndUpdateMemory(clientForMemory, userIdForMemory, lastUserMessage, finalAssistantText)
-                    .then((changed) => {
-                      if (changed) send("memory_updated", "1");
-                    })
-                    .catch((e) => console.error("memory analyze error", e))
-                    .finally(() => {
-                      safeClose();
-                    });
-                });
-                send("done", "1");
-              } else {
-                send("done", "1");
-                safeClose();
+              if (authed && lastUserMessage && !memoryMutatedInTool) {
+                try {
+                  const changed = await Promise.race([
+                    analyzeAndUpdateMemory(
+                      authed.client,
+                      authed.id,
+                      lastUserMessage,
+                      finalAssistantText,
+                      authed.token,
+                    ),
+                    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 6000)),
+                  ]);
+                  if (changed) send("memory_updated", "1");
+                } catch (e) {
+                  console.error("memory analyze error", e);
+                }
               }
+              send("done", "1");
+              safeClose();
             } catch (err) {
               console.error("stream error", err);
               if (!lastGeneratedImageDataUrl && !finalAssistantText && !hitImageLimit) {
@@ -1646,4 +2043,3 @@ export const Route = createFileRoute("/api/chat")({
     },
   },
 } as any);
-

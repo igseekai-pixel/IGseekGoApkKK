@@ -56,9 +56,6 @@ export function setCachedGmailToken(token: string | null): void {
   window.dispatchEvent(new CustomEvent('igseek:gmail-auth-changed', { detail: { connected: !!token } }));
 }
 
-/**
- * Initiates Google OAuth popup with Gmail scopes
- */
 export async function connectGmail(): Promise<{ accessToken: string; userEmail?: string } | null> {
   if (isEmbeddedWebView()) {
     const err = new Error('Google sign-in is blocked inside the APK WebView.') as Error & { code: string };
@@ -101,10 +98,6 @@ export function disconnectGmail(): void {
   setCachedGmailToken(null);
 }
 
-/* -------------------------------------------------------------------------- */
-/*                              Gmail REST API                                */
-/* -------------------------------------------------------------------------- */
-
 const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 async function fetchGmailApi(endpoint: string, options: RequestInit = {}): Promise<any> {
@@ -141,9 +134,6 @@ async function fetchGmailApi(endpoint: string, options: RequestInit = {}): Promi
   return res.json();
 }
 
-/**
- * List messages matching query
- */
 export async function listGmailMessages(params: {
   q?: string;
   maxResults?: number;
@@ -163,7 +153,6 @@ export async function listGmailMessages(params: {
 
   if (rawList.length === 0) return [];
 
-  // Fetch full details for the top messages concurrently
   const details = await Promise.all(
     rawList.slice(0, 20).map(async (item) => {
       try {
@@ -177,9 +166,6 @@ export async function listGmailMessages(params: {
   return details.filter((item): item is GmailMessageSummary => item !== null);
 }
 
-/**
- * Get detailed message
- */
 export async function getGmailMessage(messageId: string): Promise<GmailMessageSummary> {
   const msg = await fetchGmailApi(`/messages/${messageId}?format=full`);
   const headers: GmailMessageHeader[] = msg.payload?.headers || [];
@@ -192,7 +178,6 @@ export async function getGmailMessage(messageId: string): Promise<GmailMessageSu
   const to = getHeader('to') || '';
   const date = getHeader('date') || new Date().toISOString();
 
-  // Extract body content
   let body = msg.snippet || '';
   if (msg.payload?.parts && msg.payload.parts.length > 0) {
     const textPart = msg.payload.parts.find((p: any) => p.mimeType === 'text/plain') || msg.payload.parts[0];
@@ -219,9 +204,6 @@ export async function getGmailMessage(messageId: string): Promise<GmailMessageSu
   };
 }
 
-/**
- * Send email message via Gmail API (MUST be preceded by explicit user confirmation)
- */
 export async function sendGmailMessage(payload: SendEmailPayload): Promise<{ id: string; threadId: string }> {
   const utf8Subject = `=?utf-8?B?${btoa(unescape(encodeURIComponent(payload.subject)))}?=`;
 
@@ -249,9 +231,19 @@ export async function sendGmailMessage(payload: SendEmailPayload): Promise<{ id:
         const commaIdx = att.dataUrl.indexOf(",");
         if (commaIdx !== -1) {
           const meta = att.dataUrl.slice(5, commaIdx);
-          base64Data = att.dataUrl.slice(commaIdx + 1);
+          const rawBody = att.dataUrl.slice(commaIdx + 1);
           const detectedMime = meta.split(";")[0];
           if (detectedMime) mimeType = detectedMime;
+          if (meta.includes(";base64")) {
+            base64Data = rawBody;
+          } else {
+            try {
+              const decodedText = decodeURIComponent(rawBody);
+              base64Data = btoa(unescape(encodeURIComponent(decodedText)));
+            } catch {
+              base64Data = btoa(unescape(encodeURIComponent(rawBody)));
+            }
+          }
         }
       }
 
@@ -300,9 +292,6 @@ export async function sendGmailMessage(payload: SendEmailPayload): Promise<{ id:
   };
 }
 
-/**
- * Move message to trash (MUST be preceded by explicit user confirmation)
- */
 export async function trashGmailMessage(messageId: string): Promise<boolean> {
   await fetchGmailApi(`/messages/${messageId}/trash`, {
     method: 'POST',
@@ -310,9 +299,6 @@ export async function trashGmailMessage(messageId: string): Promise<boolean> {
   return true;
 }
 
-/**
- * List user Gmail labels
- */
 export async function listGmailLabels(): Promise<GmailLabel[]> {
   const data = await fetchGmailApi('/labels');
   return (data.labels || []).map((l: any) => ({
@@ -324,7 +310,6 @@ export async function listGmailLabels(): Promise<GmailLabel[]> {
   }));
 }
 
-/* Base64url helpers */
 function encodeBase64Url(str: string): string {
   const base64 = btoa(unescape(encodeURIComponent(str)));
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -341,10 +326,6 @@ function decodeBase64Url(base64url: string): string {
     return atob(base64);
   }
 }
-
-/* -------------------------------------------------------------------------- */
-/*                         Local Offline Backup Store                         */
-/* -------------------------------------------------------------------------- */
 
 const LOCAL_EMAILS_KEY = 'igseek:local_emails';
 
@@ -372,7 +353,6 @@ export function saveLocalEmail(email: Omit<GmailMessageSummary, 'id' | 'threadId
   try {
     localStorage.setItem(LOCAL_EMAILS_KEY, JSON.stringify(updated));
   } catch {
-    /* ignore */
   }
   window.dispatchEvent(new CustomEvent('igseek:local-emails-updated'));
   return newEmail;
@@ -384,7 +364,6 @@ export function deleteLocalEmail(id: string): void {
   try {
     localStorage.setItem(LOCAL_EMAILS_KEY, JSON.stringify(updated));
   } catch {
-    /* ignore */
   }
   window.dispatchEvent(new CustomEvent('igseek:local-emails-updated'));
 }

@@ -86,7 +86,6 @@ export function AuthCard({
         window.localStorage.removeItem("igseek:guest_account");
         window.localStorage.setItem("igseek:has_logged_in", "1");
       } catch {
-        /* ignore */
       }
       onSuccess?.();
     } catch (err: any) {
@@ -135,7 +134,6 @@ export function AuthCard({
         window.localStorage.removeItem("igseek:guest_account");
         window.localStorage.setItem("igseek:has_logged_in", "1");
       } catch {
-        /* ignore */
       }
       onSuccess?.();
     } catch (err: any) {
@@ -151,7 +149,6 @@ export function AuthCard({
     setError(null);
     setSuccessMessage(null);
 
-    // 1. Password Reset Mode
     if (isForgot) {
       if (!email.trim() || !email.includes("@")) {
         setError(t("Please enter a valid email address."));
@@ -170,13 +167,11 @@ export function AuthCard({
       return;
     }
 
-    // 2. Accent step in registration
     if (mode === "signup" && signupStep === "accent") {
       await handleCompleteSignup();
       return;
     }
 
-    // 3. Validation
     if (!email.trim() || !email.includes("@")) {
       setError(t("Please enter a valid email address."));
       return;
@@ -192,7 +187,6 @@ export function AuthCard({
       return;
     }
 
-    // 4. Registration Step 1 -> Validate consents & advance to mandatory accent picker
     if (mode === "signup") {
       if (!confirmPassword) {
         setError(t("Please confirm your password."));
@@ -212,7 +206,6 @@ export function AuthCard({
       return;
     }
 
-    // 5. Sign In (no accent step)
     setLoading("form");
     try {
       const res = await firebaseClient.auth.signInWithPassword({
@@ -226,7 +219,6 @@ export function AuthCard({
         window.localStorage.removeItem("igseek:guest_account");
         window.localStorage.setItem("igseek:has_logged_in", "1");
       } catch {
-        /* ignore */
       }
       onSuccess?.();
     } catch (err: any) {
@@ -240,7 +232,6 @@ export function AuthCard({
     <div
       className={`relative w-full max-w-[380px] sm:max-w-[420px] mx-auto flex flex-col items-center text-center ${className}`}
     >
-      {/* Optional close button for modals */}
       {isModal && onClose && (
         <button
           onClick={onClose}
@@ -252,7 +243,6 @@ export function AuthCard({
         </button>
       )}
 
-      {/* Brand Logo Header: IGseek */}
       <div className="mb-6 flex flex-col items-center">
         <h1 className="font-display text-4xl sm:text-5xl font-bold tracking-tight text-foreground select-none">
           <span className="text-[var(--brand)] font-extrabold">IG</span>
@@ -263,7 +253,6 @@ export function AuthCard({
         </p>
       </div>
 
-      {/* Tabs Switcher: [ Sign in | Register ] */}
       <div className="w-full max-w-[340px] rounded-full p-1 border border-border bg-surface/80 dark:border-white/10 dark:bg-white/[0.04] backdrop-blur-md flex items-center mb-6">
         <button
           type="button"
@@ -305,7 +294,6 @@ export function AuthCard({
         </button>
       </div>
 
-      {/* Alerts */}
       <div className="w-full">
         <AnimatePresence mode="wait">
           {error && (
@@ -333,10 +321,8 @@ export function AuthCard({
         </AnimatePresence>
       </div>
 
-      {/* Main Body */}
       {!isApkWebView && !showEmailForm && mode === "signin" && !isForgot ? (
         <div className="w-full flex flex-col gap-3">
-          {/* Button 1: Google */}
           <button
             type="button"
             onClick={handleGoogleAuth}
@@ -368,7 +354,6 @@ export function AuthCard({
             <span>{t("Sign in with Google")}</span>
           </button>
 
-          {/* Button 2: Email */}
           <button
             type="button"
             onClick={() => setShowEmailForm(true)}
@@ -378,14 +363,12 @@ export function AuthCard({
             <span>{t("Sign in with email")}</span>
           </button>
 
-          {/* Divider */}
           <div className="flex items-center gap-3 my-2 w-full">
             <div className="h-px bg-border flex-1" />
             <span className="text-xs text-muted-foreground font-normal">{t("or")}</span>
             <div className="h-px bg-border flex-1" />
           </div>
 
-          {/* Button 3: Create account */}
           <button
             type="button"
             onClick={() => {
@@ -400,7 +383,6 @@ export function AuthCard({
           </button>
         </div>
       ) : mode === "signup" && signupStep === "accent" ? (
-        /* Registration Step 2: Mandatory Accent Color Selection */
         <form onSubmit={handleFormSubmit} className="w-full flex flex-col gap-4 text-left">
           <button
             type="button"
@@ -479,9 +461,7 @@ export function AuthCard({
           </button>
         </form>
       ) : (
-        /* Form view for email input / registration step 1 / forgot password */
         <form onSubmit={handleFormSubmit} className="w-full flex flex-col gap-3 text-left">
-          {/* Back button (when returning to sign-in options on web, or leaving Forgot Password in APK) */}
           {(!isApkWebView || isForgot) && (
             <button
               type="button"
@@ -550,7 +530,6 @@ export function AuthCard({
             </>
           )}
 
-          {/* Email input */}
           <div className="relative">
             <Mail className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -564,7 +543,6 @@ export function AuthCard({
             />
           </div>
 
-          {/* Password input */}
           {!isForgot && (
             <div className="relative">
               <Lock className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -588,7 +566,6 @@ export function AuthCard({
             </div>
           )}
 
-          {/* Confirm Password input (signup only) */}
           {mode === "signup" && !isForgot && (
             <div className="relative">
               <Lock className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -621,7 +598,6 @@ export function AuthCard({
             </p>
           )}
 
-          {/* Mandatory legal agreement checkboxes (signup only) */}
           {mode === "signup" && !isForgot && (
             <div className="mt-1 flex flex-col gap-2">
               <div
@@ -726,7 +702,6 @@ export function AuthCard({
             </div>
           )}
 
-          {/* Forgot password link */}
           {mode === "signin" && !isForgot && (
             <div className="flex justify-end pr-2">
               <button
@@ -739,7 +714,6 @@ export function AuthCard({
             </div>
           )}
 
-          {/* Submit button */}
           <button
             type="submit"
             disabled={loading !== null}
@@ -758,9 +732,6 @@ export function AuthCard({
         </form>
       )}
 
-
-
-      {/* Footer text with links matching brand accent */}
       <p className="mt-7 text-center text-[11px] leading-relaxed text-muted-foreground max-w-xs">
         {t("By continuing, you agree to our")}
         <br />

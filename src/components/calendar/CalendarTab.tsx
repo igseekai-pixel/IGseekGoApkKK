@@ -57,13 +57,11 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [filterView, setFilterView] = useState<'upcoming' | 'today' | 'week' | 'month' | 'local'>('upcoming');
   const [searchQuery, setSearchQuery] = useState('');
-  
-  // Modal states
+
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [deletingEvent, setDeletingEvent] = useState<CalendarEvent | null>(null);
 
-  // Form states
   const [formSummary, setFormSummary] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formLocation, setFormLocation] = useState('');
@@ -74,7 +72,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
   const [formReminderMins, setFormReminderMins] = useState<number>(15);
   const [saving, setSaving] = useState(false);
 
-  // Listen for calendar auth changes & local reminders updates
   useEffect(() => {
     const handleAuthChange = (e: any) => {
       setConnected(!!e.detail?.connected);
@@ -120,7 +117,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
       }
 
       const localList = getLocalReminders().map((e) => ({ ...e, isReminder: true }));
-      // Combine and deduplicate
       const combined = [...googleEvents, ...localList];
       setEvents(combined);
     } catch (err: any) {
@@ -158,7 +154,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
       setFormSummary(evtToEdit.summary || '');
       setFormDescription(evtToEdit.description || '');
       setFormLocation(evtToEdit.location || '');
-      
+
       const startDt = evtToEdit.start.dateTime ? new Date(evtToEdit.start.dateTime) : new Date();
       setFormStartDate(startDt.toISOString().slice(0, 10));
       setFormStartTime(startDt.toTimeString().slice(0, 5));
@@ -174,7 +170,7 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
       setFormSummary('');
       setFormDescription('');
       setFormLocation('');
-      
+
       const now = new Date();
       const inOneHour = new Date(now.getTime() + 3600000);
       setFormStartDate(now.toISOString().slice(0, 10));
@@ -201,7 +197,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
 
       if (editingEvent) {
         if (!editingEvent.isReminder && token && !editingEvent.id.startsWith('local_')) {
-          // Update in Google Calendar
           await updateCalendarEvent(editingEvent.id, {
             summary: formSummary.trim(),
             description: formDescription.trim(),
@@ -211,7 +206,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
             reminderMinutes: [formReminderMins],
           });
         } else {
-          // Update local
           saveLocalReminder({
             id: editingEvent.id,
             summary: formSummary.trim(),
@@ -224,7 +218,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         }
       } else {
         if (token) {
-          // Create in Google Calendar
           await createCalendarEvent({
             summary: formSummary.trim(),
             description: formDescription.trim(),
@@ -234,7 +227,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
             reminderMinutes: [formReminderMins],
           });
         } else {
-          // Create locally
           saveLocalReminder({
             summary: formSummary.trim(),
             description: formDescription.trim(),
@@ -273,7 +265,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
     }
   };
 
-  // Filter events logic
   const filteredEvents = useMemo(() => {
     const now = new Date();
     const todayStr = now.toISOString().slice(0, 10);
@@ -282,7 +273,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
 
     return events
       .filter((evt) => {
-        // Search query filter
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const matchSum = evt.summary.toLowerCase().includes(q);
@@ -306,7 +296,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         if (filterView === 'local') {
           return evt.isReminder || evt.id.startsWith('local_');
         }
-        // Upcoming (default)
         return evtDate >= new Date(now.getTime() - 12 * 3600 * 1000);
       })
       .sort((a, b) => {
@@ -318,7 +307,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
-      {/* Top Banner / Google Calendar Sync Control */}
       <div className="shrink-0 border-b border-border bg-surface px-4 py-3 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -390,7 +378,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         </div>
       </div>
 
-      {/* Filter bar & Search */}
       <div className="shrink-0 border-b border-border bg-surface/60 px-4 py-2.5 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-1.5 overflow-x-auto py-1">
@@ -452,7 +439,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         </div>
       </div>
 
-      {/* Error notification banner if any */}
       {error && (
         <div className="shrink-0 border-b border-rose-500/20 bg-rose-500/10 px-4 py-2 text-xs text-rose-500 dark:text-rose-300 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -465,7 +451,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         </div>
       )}
 
-      {/* Main Events List Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         {loading && events.length === 0 ? (
           <div className="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -570,7 +555,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                     </div>
 
                     <div className="flex items-center gap-2 self-end sm:self-center shrink-0 border-t border-border/40 pt-2 sm:border-t-0 sm:pt-0">
-                      {/* AI Chat button */}
                       {onAskAiAboutEvent && (
                         <button
                           type="button"
@@ -586,7 +570,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                         </button>
                       )}
 
-                      {/* Google Calendar Link */}
                       {evt.htmlLink && (
                         <a
                           href={evt.htmlLink}
@@ -599,7 +582,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                         </a>
                       )}
 
-                      {/* Edit Button */}
                       <button
                         type="button"
                         onClick={() => openCreateModal(evt)}
@@ -609,7 +591,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
                         <Edit2 className="h-3.5 w-3.5" />
                       </button>
 
-                      {/* Delete Button */}
                       <button
                         type="button"
                         onClick={() => setDeletingEvent(evt)}
@@ -627,7 +608,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         )}
       </div>
 
-      {/* Modal: Create / Edit Event */}
       <AnimatePresence>
         {createModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md p-4">
@@ -783,7 +763,6 @@ export function CalendarTab({ onAskAiAboutEvent, onNavigateToChat }: CalendarTab
         )}
       </AnimatePresence>
 
-      {/* Confirmation Modal: Delete Event (MANDATORY per workspace-integration skill) */}
       <AnimatePresence>
         {deletingEvent && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md p-4">

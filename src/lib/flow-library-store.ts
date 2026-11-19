@@ -35,17 +35,12 @@ export function writeFlowLibraryFiles(files: StoredFlowLibraryFile[]): void {
   try {
     localStorage.setItem(FLOW_LIBRARY_STORAGE_KEY, JSON.stringify(files));
   } catch {
-    // ignore quota issues
   }
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("igseek:library-updated"));
   }
 }
 
-/**
- * Replaces/merges local cached Flow Library files from Firebase Cloud Firestore snapshot
- * without echoing writes back to the server.
- */
 export function replaceFlowLibraryFilesFromCloud(cloudFiles: StoredFlowLibraryFile[]): void {
   const sorted = [...cloudFiles].sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -79,7 +74,6 @@ export function upsertFlowLibraryFiles(
     const proj = item.projectId ?? null;
     const key = `${proj || ""}::${item.name}`;
     const prev = map.get(key);
-    // Avoid redundant cloud writes when exact same content & metadata already exist
     const sameContent =
       prev &&
       prev.content === item.content &&

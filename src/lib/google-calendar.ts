@@ -55,7 +55,6 @@ export interface CalendarListEntry {
   timeZone?: string;
 }
 
-// In-memory token cache as mandated by system guidelines (never stored in localStorage)
 let cachedCalendarToken: string | null = null;
 
 export function getCachedCalendarToken(): string | null {
@@ -71,9 +70,6 @@ export function setCachedCalendarToken(token: string | null): void {
   }
 }
 
-/**
- * Initiates Google OAuth popup with Google Calendar scopes to authorize Calendar API
- */
 export async function connectGoogleCalendar(): Promise<{ accessToken: string; userEmail?: string } | null> {
   if (isEmbeddedWebView()) {
     const err = new Error('Google sign-in is blocked inside the APK WebView.') as Error & { code: string };
@@ -81,7 +77,6 @@ export async function connectGoogleCalendar(): Promise<{ accessToken: string; us
     throw err;
   }
   try {
-    // Add Calendar scopes to provider
     const calendarScopes = [
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/calendar.events',
@@ -115,10 +110,6 @@ export function disconnectGoogleCalendar(): void {
   setCachedCalendarToken(null);
 }
 
-/* -------------------------------------------------------------------------- */
-/*                           Google Calendar REST API                          */
-/* -------------------------------------------------------------------------- */
-
 const CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 
 async function fetchCalendarApi(endpoint: string, options: RequestInit = {}): Promise<any> {
@@ -139,7 +130,6 @@ async function fetchCalendarApi(endpoint: string, options: RequestInit = {}): Pr
   });
 
   if (res.status === 401) {
-    // Token expired or revoked
     setCachedCalendarToken(null);
     throw new Error('Google Calendar access token expired or invalid. Please re-connect Google Calendar.');
   }
@@ -156,9 +146,6 @@ async function fetchCalendarApi(endpoint: string, options: RequestInit = {}): Pr
   return res.json();
 }
 
-/**
- * List all calendars available to the user
- */
 export async function listUserCalendars(): Promise<CalendarListEntry[]> {
   const data = await fetchCalendarApi('/users/me/calendarList');
   return (data.items || []).map((item: any) => ({
@@ -172,9 +159,6 @@ export async function listUserCalendars(): Promise<CalendarListEntry[]> {
   }));
 }
 
-/**
- * Fetch calendar events
- */
 export async function listCalendarEvents(params: {
   calendarId?: string;
   timeMin?: string;
@@ -196,7 +180,7 @@ export async function listCalendarEvents(params: {
   if (params.q) queryParams.set('q', params.q);
 
   const data = await fetchCalendarApi(`/calendars/${calendarId}/events?${queryParams.toString()}`);
-  
+
   return (data.items || []).map((item: any) => ({
     id: item.id,
     summary: item.summary || 'Untitled',
@@ -212,9 +196,6 @@ export async function listCalendarEvents(params: {
   }));
 }
 
-/**
- * Create a new event or reminder on Google Calendar
- */
 export async function createCalendarEvent(
   eventData: {
     summary: string;
@@ -228,7 +209,7 @@ export async function createCalendarEvent(
   }
 ): Promise<CalendarEvent> {
   const calendarId = encodeURIComponent(eventData.calendarId || 'primary');
-  
+
   const payload: any = {
     summary: eventData.summary,
     description: eventData.description,
@@ -268,9 +249,6 @@ export async function createCalendarEvent(
   };
 }
 
-/**
- * Update an existing Google Calendar event
- */
 export async function updateCalendarEvent(
   eventId: string,
   eventData: Partial<{
@@ -324,9 +302,6 @@ export async function updateCalendarEvent(
   };
 }
 
-/**
- * Delete an event from Google Calendar (MUST be preceded by user confirmation in UI)
- */
 export async function deleteCalendarEvent(eventId: string, calendarId: string = 'primary'): Promise<boolean> {
   const encodedCalId = encodeURIComponent(calendarId);
   await fetchCalendarApi(`/calendars/${encodedCalId}/events/${eventId}`, {
@@ -335,9 +310,6 @@ export async function deleteCalendarEvent(eventId: string, calendarId: string = 
   return true;
 }
 
-/**
- * Query free/busy slots across calendars
- */
 export async function checkCalendarFreeBusy(params: {
   timeMin: string;
   timeMax: string;
@@ -353,10 +325,6 @@ export async function checkCalendarFreeBusy(params: {
     }),
   });
 }
-
-/* -------------------------------------------------------------------------- */
-/*                     Local Backup / Offline Store for Reminders              */
-/* -------------------------------------------------------------------------- */
 
 const LOCAL_REMINDERS_KEY = 'igseek:local_reminders';
 
@@ -381,7 +349,6 @@ export function saveLocalReminder(event: Omit<CalendarEvent, 'id'> & { id?: stri
   try {
     localStorage.setItem(LOCAL_REMINDERS_KEY, JSON.stringify(updated));
   } catch {
-    /* ignore */
   }
   window.dispatchEvent(new CustomEvent('igseek:local-reminders-updated'));
   return newEvt;
@@ -393,7 +360,6 @@ export function deleteLocalReminder(id: string): void {
   try {
     localStorage.setItem(LOCAL_REMINDERS_KEY, JSON.stringify(updated));
   } catch {
-    /* ignore */
   }
   window.dispatchEvent(new CustomEvent('igseek:local-reminders-updated'));
 }

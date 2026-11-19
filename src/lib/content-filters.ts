@@ -1,6 +1,3 @@
-// Локальные контент-фильтры. Работают ДО и ПОСЛЕ вызова модели,
-// не через system prompt. Возвращают причину блокировки или null.
-
 export type FilterCategory = "terrorism" | "weapons";
 
 type Rule = { category: FilterCategory; pattern: RegExp };
@@ -85,7 +82,6 @@ export function checkContent(text: string): { blocked: true; category: FilterCat
   if (containsAny(normalized, WEAPON_OBJECT) && containsAny(normalized, WEAPON_ACTION)) {
     return { blocked: true, category: "weapons" };
   }
-  // suppress unused var warning
   void RULES;
   return { blocked: false };
 }

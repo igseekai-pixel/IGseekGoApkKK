@@ -1,5 +1,3 @@
-// Types and data definitions for Flow - Intelligent Automation Center
-
 export type FlowAutonomyLevel = "assist" | "semi-auto" | "autopilot";
 
 export type FlowTaskStatus =
@@ -30,7 +28,7 @@ export interface FlowStep {
   id: string;
   title: string;
   description?: string;
-  tool: string; // e.g. "web_search", "web_monitor", "terminal", "github", "library", "email", "calendar"
+  tool: string;
   toolParams?: Record<string, any>;
   status: FlowStepStatus;
   output?: string;
@@ -89,7 +87,7 @@ export interface FlowScenario {
 }
 
 export interface FlowIntegration {
-  id: string; // e.g. "github", "gmail", "calendar"
+  id: string;
   name: string;
   description: string;
   connected: boolean;

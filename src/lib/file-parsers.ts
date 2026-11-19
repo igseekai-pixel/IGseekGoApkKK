@@ -1,9 +1,6 @@
-// Client-side file parsers for chat attachments.
-// Extracts readable text from PDF, DOCX, XLSX, PPTX, ZIP, etc.
-
 export type ParseResult = {
   kind: "text" | "image" | "binary";
-  content: string; // markdown-ready block
+  content: string;
   note?: string;
 };
 
@@ -33,7 +30,7 @@ function truncate(s: string, max = 200_000) {
 
 async function parsePdf(file: File): Promise<string> {
   const pdfjs: any = await import("pdfjs-dist");
-  // @ts-ignore - vite ?url import for worker
+  // @ts-ignore
   const workerUrl = (await import("pdfjs-dist/build/pdf.worker.mjs?url")).default;
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const buf = await file.arrayBuffer();
@@ -123,7 +120,6 @@ export async function parseAttachment(file: File): Promise<ParseResult> {
   const sizeLabel = file.size > 1024 * 1024 ? `${sizeMb} MB` : `${sizeKb} KB`;
   const header = (icon: string) => `${icon} **${name}** (${sizeLabel})`;
 
-  // Plain text / code
   if (TEXT_EXT.has(ext) || file.type.startsWith("text/") || file.type.includes("json") || file.type.includes("xml") || file.type.includes("javascript")) {
     if (file.size <= 5 * 1024 * 1024) {
       const txt = await file.text();
@@ -131,7 +127,6 @@ export async function parseAttachment(file: File): Promise<ParseResult> {
     }
   }
 
-  // Images → data URL for vision
   if (IMG_EXT.has(ext) || file.type.startsWith("image/")) {
     if (file.size <= 10 * 1024 * 1024) {
       const dataUrl: string = await new Promise((res, rej) => {
@@ -144,7 +139,6 @@ export async function parseAttachment(file: File): Promise<ParseResult> {
     }
   }
 
-  // Structured documents
   try {
     if (ext === "pdf") {
       const text = await parsePdf(file);
@@ -163,7 +157,6 @@ export async function parseAttachment(file: File): Promise<ParseResult> {
       return { kind: "text", content: `${header("📙")}\n${fence("text", truncate(text))}` };
     }
     if (ext === "zip" || ext === "jar" || ext === "apk" || ext === "docx" || ext === "xlsx" || ext === "pptx") {
-      // (docx/xlsx/pptx handled above; jar/apk fall through)
     }
     if (ext === "zip" || ext === "jar" || ext === "apk") {
       const text = await parseZip(file);
@@ -191,7 +184,6 @@ export async function parseAttachment(file: File): Promise<ParseResult> {
     };
   }
 
-  // Unknown binary
   return {
     kind: "binary",
     content: `${header("📎")} — attached (binary, ${file.type || "unknown type"})`,

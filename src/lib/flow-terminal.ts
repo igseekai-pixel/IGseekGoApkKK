@@ -6,7 +6,6 @@ import type { TerminalExecutionResult } from "../types/flow";
 
 const execAsync = promisify(exec);
 
-// Allowed commands and security sandbox policies
 const SANDBOX_ROOT = path.resolve("/tmp/igseek_sandbox/workspace");
 
 const FORBIDDEN_PATTERNS = [
@@ -14,7 +13,7 @@ const FORBIDDEN_PATTERNS = [
   /\brm\s+-rf\s+~($|\s)/i,
   /\bmkfs\b/i,
   /\bdd\s+if=/i,
-  /:(){ :\|:& };:/, // fork bomb
+  /:(){ :\|:& };:/,
   /\bshutdown\b/i,
   /\breboot\b/i,
   /\bchmod\s+-R\s+777\s+\//i,
@@ -68,9 +67,6 @@ function isLikelyTextFile(filename: string): boolean {
   return !binaryExts.includes(ext);
 }
 
-/**
- * Returns the workspace root and library directory for either global scope or a specific project.
- */
 export function getSandboxPaths(projectId?: string | null): { workspaceDir: string; libraryDir: string } {
   const safeProj = sanitizeProjectId(projectId);
   if (safeProj) {
@@ -84,9 +80,6 @@ export function getSandboxPaths(projectId?: string | null): { workspaceDir: stri
   };
 }
 
-/**
- * Initializes the sandbox workspace and library directory cleanly without creating fake stub files.
- */
 export async function initLibraryDirectory(projectId?: string | null): Promise<string> {
   const { workspaceDir, libraryDir } = getSandboxPaths(projectId);
   try {
@@ -109,9 +102,6 @@ export interface DiskLibraryEntry {
   projectId: string | null;
 }
 
-/**
- * Lists files genuinely present inside the sandbox Library directory.
- */
 export async function listLibraryFilesOnDisk(
   projectId?: string | null,
   includeContent = false
@@ -141,7 +131,6 @@ export async function listLibraryFilesOnDisk(
           projectId: cleanProj,
         });
       } catch {
-        // skip unreadable
       }
     }
     results.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
@@ -151,9 +140,6 @@ export async function listLibraryFilesOnDisk(
   }
 }
 
-/**
- * Reads and verifies a specific file inside the sandbox Library directory.
- */
 export async function readLibraryFileOnDisk(
   filename: string,
   projectId?: string | null
@@ -177,15 +163,11 @@ export async function readLibraryFileOnDisk(
         updatedAt: stat.mtime.toISOString(),
       };
     } catch {
-      // try next candidate
     }
   }
   return null;
 }
 
-/**
- * Writes a file into the sandbox Library directory and immediately verifies it on disk.
- */
 export async function writeLibraryFileOnDisk(
   filename: string,
   content: string,
@@ -207,9 +189,6 @@ export async function writeLibraryFileOnDisk(
   };
 }
 
-/**
- * Deletes a file from the sandbox Library directory.
- */
 export async function deleteLibraryFileOnDisk(filename: string, projectId?: string | null): Promise<boolean> {
   const libDir = await initLibraryDirectory(projectId);
   const candidates = [
@@ -222,15 +201,11 @@ export async function deleteLibraryFileOnDisk(filename: string, projectId?: stri
       await fs.unlink(candidate);
       return true;
     } catch {
-      // try next
     }
   }
   return false;
 }
 
-/**
- * Renames a file inside the sandbox Library directory.
- */
 export async function renameLibraryFileOnDisk(
   oldName: string,
   newName: string,
@@ -252,15 +227,11 @@ export async function renameLibraryFileOnDisk(
       await fs.rename(oldPath, newPath);
       return true;
     } catch {
-      // try next
     }
   }
   return false;
 }
 
-/**
- * Syncs in-memory library files from frontend to the real ./library folder on disk.
- */
 export async function syncLibraryFilesToDisk(
   files: Array<{ name: string; dataUrl?: string; content?: string }>,
   projectId?: string | null
@@ -315,15 +286,12 @@ async function snapshotLibMtimes(libDir: string): Promise<Map<string, number>> {
       try {
         const st = await fs.stat(path.join(libDir, e.name));
         map.set(e.name, st.mtimeMs);
-      } catch { /* ignore */ }
+      } catch {  }
     }
-  } catch { /* ignore */ }
+  } catch {  }
   return map;
 }
 
-/**
- * Executes a terminal command with Arch Linux personality and real Linux execution.
- */
 export async function executeTerminalCommand(
   rawCommand: string,
   options: { cwd?: string; timeoutMs?: number; env?: Record<string, string>; projectId?: string | null } = {}
@@ -331,11 +299,9 @@ export async function executeTerminalCommand(
   const start = Date.now();
   const command = rawCommand.trim();
 
-  // Ensure workspace and library dirs exist for active project/global scope
   const { workspaceDir, libraryDir } = getSandboxPaths(options.projectId);
   await initLibraryDirectory(options.projectId);
 
-  // 1. Sandbox security guard check: prevent platform source and system secrets inspection
   const platformEscape = /\/app\b|\/proc\b|\/sys\b|\/etc\/shadow|\.\.\/\.\./i.test(command);
   if (platformEscape) {
     return {
@@ -376,7 +342,6 @@ export async function executeTerminalCommand(
     }
   }
 
-  // 2. Arch Linux emulation intercepts
   const lower = command.toLowerCase();
 
   if (lower === "neofetch" || lower === "fastfetch") {
@@ -446,7 +411,6 @@ HOME_URL="https://archlinux.org/"`,
     }
   }
 
-  // 3. Handling CD command
   const cdMatch = command.match(/^cd(?:\s+(.*))?$/);
   if (cdMatch) {
     const rawDest = (cdMatch[1] || "").trim();
@@ -492,10 +456,8 @@ HOME_URL="https://archlinux.org/"`,
     }
   }
 
-  // 4. Snapshot library directory before running bash command
   const beforeSnap = await snapshotLibMtimes(libraryDir);
 
-  // Real Linux Bash Command Execution: strict timeout and stdin redirected from /dev/null
   const timeout = Math.min(options.timeoutMs || 12000, 20000);
   const wrappedCommand = `( ${command} ) < /dev/null\necho "__FLOW_PWD__"$(pwd)`;
 
@@ -534,7 +496,6 @@ HOME_URL="https://archlinux.org/"`,
       cleanStdout = cleanStdout.slice(0, -1);
     }
 
-    // Detect files created or modified inside ./library
     const afterSnap = await snapshotLibMtimes(libraryDir);
     const createdFiles: Array<{ name: string; type: string; content: string; projectId?: string | null }> = [];
     const cleanProj = sanitizeProjectId(options.projectId);
@@ -555,7 +516,7 @@ HOME_URL="https://archlinux.org/"`,
               projectId: cleanProj,
             });
           }
-        } catch { /* ignore */ }
+        } catch {  }
       }
     }
 

@@ -37,7 +37,6 @@ export async function waitForAuthProfileSetup(): Promise<void> {
         new Promise<void>((resolve) => setTimeout(resolve, 5000)),
       ]);
     } catch {
-      // ignore
     }
   }
 }
@@ -134,7 +133,6 @@ function readPreferredTheme(): string {
     const saved = window.localStorage.getItem('igseek:theme');
     if (saved === 'light' || saved === 'dark') return saved;
   } catch {
-    /* ignore */
   }
   return 'light';
 }
@@ -145,7 +143,6 @@ function readPreferredLang(): string {
     const saved = window.localStorage.getItem('igseek:lang');
     if (saved === 'en' || saved === 'ru' || saved === 'es' || saved === 'fr' || saved === 'ar') return saved;
   } catch {
-    /* ignore */
   }
   return 'en';
 }
@@ -232,8 +229,6 @@ function normalizeDocData<T = any>(id: string, rawData: any): T {
   return norm as unknown as T;
 }
 
-/* ==================== LOCAL EMAIL ACCOUNT STORE & FALLBACK DB ==================== */
-
 const LOCAL_USER_KEY = 'igseek:local_user';
 const LOCAL_ACCOUNTS_KEY = 'igseek:accounts_v1';
 const LOCAL_DB_PREFIX = 'igseek:local_db:';
@@ -278,7 +273,6 @@ async function hashPassword(password: string, salt: string): Promise<string> {
         .join('');
     }
   } catch {
-    // fallback if crypto.subtle unavailable
   }
   let h1 = 0x811c9dc5;
   let h2 = 0x9e3779b9;
@@ -303,7 +297,6 @@ function nativePersistGet(key: string): string | null {
     const val = window.localStorage.getItem(key);
     if (val) return val;
   } catch {
-    // ignore
   }
   try {
     const bridge = getNativeBridge();
@@ -313,13 +306,11 @@ function nativePersistGet(key: string): string | null {
         try {
           window.localStorage.setItem(key, nVal);
         } catch {
-          // ignore
         }
         return nVal;
       }
     }
   } catch {
-    // ignore
   }
   return null;
 }
@@ -329,7 +320,6 @@ function nativePersistSet(key: string, value: string) {
   try {
     window.localStorage.setItem(key, value);
   } catch {
-    // ignore
   }
   try {
     const bridge = getNativeBridge();
@@ -337,7 +327,6 @@ function nativePersistSet(key: string, value: string) {
       bridge.setItem(key, value);
     }
   } catch {
-    // ignore
   }
 }
 
@@ -346,7 +335,6 @@ function nativePersistRemove(key: string) {
   try {
     window.localStorage.removeItem(key);
   } catch {
-    // ignore
   }
   try {
     const bridge = getNativeBridge();
@@ -354,7 +342,6 @@ function nativePersistRemove(key: string) {
       bridge.removeItem(key);
     }
   } catch {
-    // ignore
   }
 }
 
@@ -388,7 +375,6 @@ function writeSessionCookiePayload(localUserPayload: { uid: string; email: strin
       document.cookie = `${SESSION_COOKIE_NAME}=${encoded}; Max-Age=2592000; Path=/; SameSite=Lax${secureFlag}`;
     }
   } catch {
-    // ignore cookie errors
   }
 }
 
@@ -409,7 +395,6 @@ function writeLocalAccounts(accounts: Record<string, StoredLocalAccount>) {
   try {
     nativePersistSet(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
   } catch {
-    // ignore storage errors
   }
 }
 
@@ -475,7 +460,6 @@ function setLocalFallbackUser(uid: string, email: string, name?: string) {
       nativePersistSet('igseek:has_logged_in', '1');
       writeSessionCookiePayload(payload, true);
     } catch {
-      // ignore
     }
   }
   return buildLocalUserObject(payload);
@@ -487,7 +471,6 @@ function clearLocalFallbackSession() {
     nativePersistRemove(LOCAL_USER_KEY);
     writeSessionCookiePayload(null, Boolean(auth.currentUser));
   } catch {
-    // ignore
   }
 }
 
@@ -515,7 +498,6 @@ function writeLocalCollection(collectionName: string, data: Record<string, any>)
       window.localStorage.setItem(key, serialized);
     }
   } catch {
-    // ignore storage quota errors
   }
 }
 
@@ -531,7 +513,6 @@ function notifyAuthListeners(event: string, user: any) {
     try {
       cb(event, session);
     } catch {
-      // ignore subscriber errors
     }
   }
 }
@@ -540,6 +521,30 @@ function userToSession(u: User | null) {
   if (!u) return null;
   return {
     access_token: (u as any).accessToken || u.uid,
+    token_type: 'bearer',
+    user: {
+      id: u.uid,
+      email: u.email ?? '',
+      user_metadata: {
+        full_name: u.displayName ?? '',
+        name: u.displayName ?? '',
+      },
+    },
+  };
+}
+
+async function userToFreshSession(u: any) {
+  if (!u) return null;
+  let token = (u as any).accessToken || u.uid;
+  if (typeof u.getIdToken === 'function') {
+    try {
+      token = await u.getIdToken();
+    } catch {
+      token = (u as any).accessToken || u.uid;
+    }
+  }
+  return {
+    access_token: token,
     token_type: 'bearer',
     user: {
       id: u.uid,
@@ -913,42 +918,107 @@ class FirestoreQueryBuilder<T = any> {
   }
 
   delete() {
+    const cleanLocal = (field: string, value: any) => {
+      const store = readLocalCollection(this.collectionName);
+      if (field === 'id') {
+        delete store[value];
+      } else {
+        const uid = getLocalFallbackUser()?.uid || auth.currentUser?.uid;
+        for (const [docId, docData] of Object.entries(store)) {
+          const row = docData as any;
+          const matchesField =
+            row?.[field] === value || (field === 'chat_id' && row?.chatId === value);
+          if (
+            matchesField &&
+            (!uid || field === 'user_id' || field === 'userId' || row.user_id === uid || row.userId === uid)
+          ) {
+            delete store[docId];
+          }
+        }
+      }
+      writeLocalCollection(this.collectionName, store);
+    };
+
+    const deleteByOwnerFilter = async (uid: string, field: string, value: any) => {
+      const seen = new Set<string>();
+      const refs: any[] = [];
+      for (const ownerField of ['user_id', 'userId']) {
+        try {
+          const snap = await getDocs(query(collection(db, this.collectionName), where(ownerField, '==', uid)));
+          for (const d of snap.docs) {
+            if (seen.has(d.id)) continue;
+            const data = d.data() as any;
+            const matches =
+              data?.[field] === value || (field === 'chat_id' && data?.chatId === value);
+            if (matches) {
+              seen.add(d.id);
+              refs.push(d.ref);
+            }
+          }
+        } catch {
+        }
+      }
+      await Promise.all(
+        refs.map((r) => deleteDoc(r).catch(() => {})),
+      );
+    };
+
     return {
       eq: (field: string, value: any) => {
         const execDelete = async () => {
+          cleanLocal(field, value);
           if (isUsingLocalDb()) {
-            const store = readLocalCollection(this.collectionName);
-            if (field === 'id') {
-              delete store[value];
-            } else {
-              const uid = getLocalFallbackUser()?.uid;
-              for (const [docId, docData] of Object.entries(store)) {
-                const row = docData as any;
-                if (row?.[field] === value && (!uid || field === 'user_id' || field === 'userId' || row.user_id === uid || row.userId === uid)) {
-                  delete store[docId];
-                }
-              }
-            }
-            writeLocalCollection(this.collectionName, store);
+            return { error: null };
+          }
+          if (!auth.currentUser) {
             return { error: null };
           }
 
+          const uid = auth.currentUser.uid;
           try {
             if (field === 'id') {
-              await deleteDoc(doc(db, this.collectionName, value));
-            } else {
-              const uid = auth.currentUser?.uid;
-              const constraints: any[] = [where(field, '==', value)];
-              if (uid && field !== 'user_id' && field !== 'userId') {
-                constraints.unshift(where('user_id', '==', uid));
-              }
-              const snap = await getDocs(query(collection(db, this.collectionName), ...constraints));
-              for (const d of snap.docs) {
-                try {
-                  await deleteDoc(d.ref);
-                } catch {
-                  // ignore
+              try {
+                await deleteDoc(doc(db, this.collectionName, value));
+                return { error: null };
+              } catch (idErr: any) {
+                const code = String(idErr?.code || '');
+                const msg = String(idErr?.message || '');
+                if (code === 'not-found' || code === 'permission-denied' || msg.includes('permission')) {
+                  let stillExists = false;
+                  for (const ownerField of ['user_id', 'userId']) {
+                    try {
+                      const snap = await getDocs(
+                        query(collection(db, this.collectionName), where(ownerField, '==', uid)),
+                      );
+                      const hit = snap.docs.find((d) => d.id === value);
+                      if (hit) {
+                        stillExists = true;
+                        await deleteDoc(hit.ref);
+                        stillExists = false;
+                        break;
+                      }
+                    } catch {
+                    }
+                  }
+                  if (!stillExists) {
+                    return { error: null };
+                  }
                 }
+                return { error: idErr };
+              }
+            } else {
+              try {
+                const constraints: any[] = [where(field, '==', value)];
+                if (field !== 'user_id' && field !== 'userId') {
+                  constraints.unshift(where('user_id', '==', uid));
+                }
+                const snap = await getDocs(query(collection(db, this.collectionName), ...constraints));
+                await Promise.all(snap.docs.map((d) => deleteDoc(d.ref).catch(() => {})));
+                if (field === 'chat_id') {
+                  await deleteByOwnerFilter(uid, field, value);
+                }
+              } catch {
+                await deleteByOwnerFilter(uid, field, value);
               }
             }
             return { error: null };
@@ -965,39 +1035,43 @@ class FirestoreQueryBuilder<T = any> {
             return execDelete().then(onfulfilled, onrejected);
           },
           gt: async (gtField: string, gtValue: any) => {
-            if (isUsingLocalDb()) {
-              const store = readLocalCollection(this.collectionName);
-              const uid = getLocalFallbackUser()?.uid;
-              for (const [docId, docData] of Object.entries(store)) {
-                const row = docData as any;
-                if (
-                  row?.[field] === value &&
-                  row?.[gtField] > gtValue &&
-                  (!uid || field === 'user_id' || field === 'userId' || row.user_id === uid || row.userId === uid)
-                ) {
-                  delete store[docId];
-                }
+            const store = readLocalCollection(this.collectionName);
+            const uidLocal = getLocalFallbackUser()?.uid || auth.currentUser?.uid;
+            for (const [docId, docData] of Object.entries(store)) {
+              const row = docData as any;
+              if (
+                row?.[field] === value &&
+                row?.[gtField] > gtValue &&
+                (!uidLocal || field === 'user_id' || field === 'userId' || row.user_id === uidLocal || row.userId === uidLocal)
+              ) {
+                delete store[docId];
               }
-              writeLocalCollection(this.collectionName, store);
+            }
+            writeLocalCollection(this.collectionName, store);
+            if (isUsingLocalDb() || !auth.currentUser) {
               return { error: null };
             }
             try {
-              const uid = auth.currentUser?.uid;
-              const constraints: any[] = [where(field, '==', value)];
-              if (uid && field !== 'user_id' && field !== 'userId') {
-                constraints.unshift(where('user_id', '==', uid));
-              }
-              const snap = await getDocs(query(collection(db, this.collectionName), ...constraints));
-              for (const d of snap.docs) {
-                const data = d.data() as any;
-                if (data?.[gtField] > gtValue) {
-                  try {
-                    await deleteDoc(d.ref);
-                  } catch {
-                    // ignore
-                  }
+              const uid = auth.currentUser.uid;
+              let docsToCheck: any[] = [];
+              try {
+                const constraints: any[] = [where(field, '==', value)];
+                if (field !== 'user_id' && field !== 'userId') {
+                  constraints.unshift(where('user_id', '==', uid));
                 }
+                const snap = await getDocs(query(collection(db, this.collectionName), ...constraints));
+                docsToCheck = snap.docs;
+              } catch {
+                const snap = await getDocs(
+                  query(collection(db, this.collectionName), where('user_id', '==', uid)),
+                );
+                docsToCheck = snap.docs.filter((d) => (d.data() as any)?.[field] === value);
               }
+              await Promise.all(
+                docsToCheck
+                  .filter((d) => (d.data() as any)?.[gtField] > gtValue)
+                  .map((d) => deleteDoc(d.ref).catch(() => {})),
+              );
               return { error: null };
             } catch (err: any) {
               return { error: err };
@@ -1032,7 +1106,6 @@ class FirestoreQueryBuilder<T = any> {
               try {
                 await deleteDoc(doc(db, this.collectionName, val));
               } catch {
-                // ignore
               }
             }
           } else {
@@ -1048,7 +1121,6 @@ class FirestoreQueryBuilder<T = any> {
               try {
                 await deleteDoc(d.ref);
               } catch {
-                // ignore
               }
             }
           }
@@ -1211,7 +1283,6 @@ async function ensureCleanSlateAuthReset(): Promise<void> {
           await fbSignOut(auth);
         }
       } catch {
-        // ignore
       } finally {
         try {
           nativePersistRemove('igseek:has_logged_in');
@@ -1242,7 +1313,7 @@ export const firebaseClient = {
         }
         return {
           data: {
-            session: userToSession(u),
+            session: await userToFreshSession(u),
           },
         };
       }
@@ -1266,7 +1337,6 @@ export const firebaseClient = {
           });
         }
       } catch {
-        // ignore auth state hydration errors
       }
       const finalUser = auth.currentUser || getLocalFallbackUser();
       if (auth.currentUser) {
@@ -1276,7 +1346,7 @@ export const firebaseClient = {
       }
       return {
         data: {
-          session: userToSession(finalUser),
+          session: await userToFreshSession(finalUser),
         },
       };
     },
@@ -1342,7 +1412,6 @@ export const firebaseClient = {
       const cleanEmail = email.trim();
       const emailKey = cleanEmail.toLowerCase();
 
-      // Check local account store first if Firebase Auth Email/Password is disabled or account was created locally
       const tryLocalSignIn = async () => {
         const accounts = readLocalAccounts();
         const acc = accounts[emailKey];
@@ -1521,7 +1590,6 @@ export const firebaseClient = {
           };
         }
 
-        // Real account registry in persistent storage when Firebase Email/Password provider is disabled
         const accounts = readLocalAccounts();
         if (accounts[emailKey]) {
           return {
@@ -1681,7 +1749,6 @@ export const firebaseClient = {
       try {
         await fbSignOut(auth);
       } catch {
-        // ignore
       }
       clearLocalFallbackSession();
       try {

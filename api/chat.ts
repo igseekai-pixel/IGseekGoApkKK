@@ -5,12 +5,10 @@ export const config = {
 };
 
 export default async function handler(req: any, res?: any) {
-  // Edge runtime or Web Standard Request
   if (req instanceof Request || (req?.headers && typeof req.headers.get === 'function')) {
     return handleChatPost(req);
   }
 
-  // Node runtime on Vercel
   try {
     const protocol = req.headers['x-forwarded-proto'] || 'https';
     const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';

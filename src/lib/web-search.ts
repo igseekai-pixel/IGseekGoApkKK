@@ -33,7 +33,6 @@ function extractQueryKeywords(query: string): string[] {
 function isRelevantHit(title: string, snippet: string, url: string, keywords: string[]): boolean {
   if (keywords.length === 0) return true;
   const haystack = `${title} ${snippet} ${url}`.toLowerCase();
-  // Match full token or 4-char stem prefix (for Russian inflections)
   return keywords.some((kw) => {
     const stem = kw.length >= 5 ? kw.slice(0, kw.length - 1) : kw;
     return haystack.includes(kw) || (stem.length >= 4 && haystack.includes(stem));
@@ -68,7 +67,6 @@ async function searchDuckDuckGoHtml(query: string): Promise<WebSearchHit[]> {
         try {
           href = decodeURIComponent(uddg[1]);
         } catch {
-          // keep original href
         }
       }
       if (!href.startsWith("http")) continue;
@@ -121,7 +119,6 @@ async function searchBingRss(query: string): Promise<WebSearchHit[]> {
       }
       if (hits.length > 0) return hits;
     } catch {
-      // try next attempt
     }
   }
   return [];
@@ -184,18 +181,12 @@ async function searchWikipedia(query: string): Promise<WebSearchHit[]> {
           }));
         }
       } catch {
-        // continue
       }
     }
   }
   return [];
 }
 
-/**
- * Multi-provider resilient live web search without requiring external search API keys.
- * Queries DuckDuckGo HTML, Bing RSS, Google News RSS, and Wikipedia in parallel,
- * deduplicates results by URL, and filters out geo/CAPTCHA noise.
- */
 export async function searchWebLive(query: string, limit = 6): Promise<WebSearchHit[]> {
   const cleanQ = query.trim();
   if (!cleanQ) return [];

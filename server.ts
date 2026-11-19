@@ -10,7 +10,6 @@ const app = express();
 const port = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
-// Helper to convert Express request to Web Standard Request safely without hanging
 async function toWebRequest(req: express.Request): Promise<Request> {
   let bodyBuffer: Buffer;
 
@@ -25,7 +24,6 @@ async function toWebRequest(req: express.Request): Promise<Request> {
   } else if (req.readableEnded || (req as any)._readableState?.ended) {
     bodyBuffer = Buffer.alloc(0);
   } else {
-    // Read from incoming stream with safety timeout so req NEVER hangs
     bodyBuffer = await new Promise<Buffer>((resolve, reject) => {
       const chunks: Buffer[] = [];
       let resolved = false;
@@ -58,7 +56,7 @@ async function toWebRequest(req: express.Request): Promise<Request> {
         reject(err);
       };
 
-      resetIdleTimer(); // Idle timeout only; resets as chunks arrive
+      resetIdleTimer();
 
       req.on('data', onData);
       req.on('end', onEnd);
@@ -87,7 +85,6 @@ async function toWebRequest(req: express.Request): Promise<Request> {
   });
 }
 
-// Helper to stream Web Standard Response to Express response
 async function pipeWebResponse(webRes: Response, res: express.Response) {
   res.status(webRes.status);
   webRes.headers.forEach((val, key) => {
@@ -115,7 +112,6 @@ async function pipeWebResponse(webRes: Response, res: express.Response) {
           }
         }
       } catch {
-        // ignore broken pipe on client abort
       } finally {
         res.off('close', onClose);
         if (!res.writableEnded) res.end();
@@ -132,7 +128,6 @@ async function pipeWebResponse(webRes: Response, res: express.Response) {
 let viteDevServer: any = null;
 const isBundledServer = path.extname(__filename) !== '.ts';
 
-// Route handlers for backend API
 app.post('/api/chat', async (req, res) => {
   try {
     const webReq = await toWebRequest(req);
@@ -173,6 +168,29 @@ app.all('/api/memory', async (req, res) => {
     await pipeWebResponse(webRes, res);
   } catch (err: any) {
     console.error('API /api/memory error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message || 'Internal server error' });
+    }
+  }
+});
+
+app.all('/api/library', async (req, res) => {
+  try {
+    const webReq = await toWebRequest(req);
+
+    let handleLibraryRequest: (r: Request) => Promise<Response>;
+    if (viteDevServer) {
+      const mod = await viteDevServer.ssrLoadModule('/src/routes/api/library.ts');
+      handleLibraryRequest = mod.handleLibraryRequest;
+    } else {
+      const mod = await import('./src/routes/api/library.ts');
+      handleLibraryRequest = mod.handleLibraryRequest;
+    }
+
+    const webRes = await handleLibraryRequest(webReq);
+    await pipeWebResponse(webRes, res);
+  } catch (err: any) {
+    console.error('API /api/library error:', err);
     if (!res.headersSent) {
       res.status(500).json({ error: err.message || 'Internal server error' });
     }

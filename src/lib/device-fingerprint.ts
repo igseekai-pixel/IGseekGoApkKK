@@ -1,6 +1,3 @@
-// Stable-ish device fingerprint. Uniqueness is guaranteed by DB UNIQUE constraint;
-// this only aims to be stable within the same browser/device.
-
 const STORAGE_KEY = "igseek:device-fp";
 let memoizedFingerprintPromise: Promise<string> | null = null;
 
@@ -56,11 +53,10 @@ function webglSignature(): string {
 
 async function computeHardwareFingerprint(): Promise<string> {
   const nav = navigator;
-  // Use stable hardware/OS traits only (avoid UI language or volatile storage state)
   const parts = [
     String(nav.platform || ""),
     String(nav.hardwareConcurrency || ""),
-    // @ts-expect-error deviceMemory is non-standard
+    // @ts-expect-error
     String(nav.deviceMemory || ""),
     String(nav.maxTouchPoints ?? ""),
     `${screen.width}x${screen.height}x${screen.colorDepth}x${screen.pixelDepth}`,
@@ -75,7 +71,6 @@ async function computeHardwareFingerprint(): Promise<string> {
   try {
     localStorage.setItem(STORAGE_KEY, hash);
   } catch {
-    // ignore
   }
   return hash;
 }
@@ -88,7 +83,6 @@ export function getDeviceFingerprint(): Promise<string> {
         const cached = localStorage.getItem(STORAGE_KEY);
         if (cached && /^[a-zA-Z0-9_-]{32,128}$/.test(cached)) return cached;
       } catch {
-        // ignore
       }
       return "";
     });

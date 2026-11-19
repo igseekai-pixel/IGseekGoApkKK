@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import { RouterProvider } from '@tanstack/react-router';
 import { getRouter } from './router';
 

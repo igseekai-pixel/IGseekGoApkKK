@@ -7,9 +7,9 @@ export interface GoogleTask {
   id: string;
   title: string;
   notes?: string;
-  due?: string; // ISO RFC 3339 timestamp
+  due?: string;
   status: 'needsAction' | 'completed';
-  completed?: string; // ISO RFC 3339 timestamp
+  completed?: string;
   deleted?: boolean;
   updated?: string;
   position?: string;
@@ -43,9 +43,6 @@ export function setCachedTasksToken(token: string | null): void {
   window.dispatchEvent(new CustomEvent('igseek:tasks-auth-changed', { detail: { connected: !!token } }));
 }
 
-/**
- * Initiates Google OAuth popup with Google Tasks scopes
- */
 export async function connectGoogleTasks(): Promise<{ accessToken: string; userEmail?: string } | null> {
   if (isEmbeddedWebView()) {
     const err = new Error('Google sign-in is blocked inside the APK WebView.') as Error & { code: string };
@@ -84,10 +81,6 @@ export function disconnectGoogleTasks(): void {
   setCachedTasksToken(null);
 }
 
-/* -------------------------------------------------------------------------- */
-/*                            Google Tasks REST API                            */
-/* -------------------------------------------------------------------------- */
-
 const TASKS_API_BASE = 'https://tasks.googleapis.com/tasks/v1';
 
 async function fetchTasksApi(endpoint: string, options: RequestInit = {}): Promise<any> {
@@ -124,9 +117,6 @@ async function fetchTasksApi(endpoint: string, options: RequestInit = {}): Promi
   return res.json();
 }
 
-/**
- * Fetch all task lists for the user
- */
 export async function listTaskLists(): Promise<GoogleTaskList[]> {
   const data = await fetchTasksApi('/users/@me/lists');
   return (data.items || []).map((item: any) => ({
@@ -136,9 +126,6 @@ export async function listTaskLists(): Promise<GoogleTaskList[]> {
   }));
 }
 
-/**
- * Fetch tasks from a specific task list
- */
 export async function listGoogleTasks(
   taskListId: string = '@default',
   showCompleted: boolean = true
@@ -165,9 +152,6 @@ export async function listGoogleTasks(
   }));
 }
 
-/**
- * Create a task in Google Tasks
- */
 export async function createGoogleTask(
   taskData: TaskPayload,
   taskListId: string = '@default'
@@ -200,9 +184,6 @@ export async function createGoogleTask(
   };
 }
 
-/**
- * Update an existing task in Google Tasks
- */
 export async function updateGoogleTask(
   taskId: string,
   taskData: Partial<GoogleTask>,
@@ -238,9 +219,6 @@ export async function updateGoogleTask(
   };
 }
 
-/**
- * Delete a task from Google Tasks (MUST be preceded by explicit user confirmation)
- */
 export async function deleteGoogleTask(taskId: string, taskListId: string = '@default'): Promise<boolean> {
   const encodedListId = encodeURIComponent(taskListId);
   const encodedTaskId = encodeURIComponent(taskId);
@@ -249,10 +227,6 @@ export async function deleteGoogleTask(taskId: string, taskListId: string = '@de
   });
   return true;
 }
-
-/* -------------------------------------------------------------------------- */
-/*                         Local Offline Backup Store                         */
-/* -------------------------------------------------------------------------- */
 
 const LOCAL_TASKS_KEY = 'igseek:local_tasks';
 
@@ -279,7 +253,6 @@ export function saveLocalTask(task: Omit<GoogleTask, 'id'> & { id?: string }): G
   try {
     localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(updated));
   } catch {
-    /* ignore */
   }
   window.dispatchEvent(new CustomEvent('igseek:local-tasks-updated'));
   return newTask;
@@ -304,7 +277,6 @@ export function toggleLocalTaskStatus(id: string): GoogleTask | null {
   try {
     localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(updated));
   } catch {
-    /* ignore */
   }
   window.dispatchEvent(new CustomEvent('igseek:local-tasks-updated'));
   return updatedTask;
@@ -316,7 +288,6 @@ export function deleteLocalTask(id: string): void {
   try {
     localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(updated));
   } catch {
-    /* ignore */
   }
   window.dispatchEvent(new CustomEvent('igseek:local-tasks-updated'));
 }

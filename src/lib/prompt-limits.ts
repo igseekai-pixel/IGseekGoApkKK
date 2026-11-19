@@ -23,8 +23,8 @@ export function isScopeUnlimited(scope: PromptScope): boolean {
 }
 
 export const CANCEL_REFUND_WINDOW_MS = 5000;
-export const PROMPT_RESET_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
-export const IMAGE_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours (daily limit)
+export const PROMPT_RESET_INTERVAL_MS = 12 * 60 * 60 * 1000;
+export const IMAGE_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export function getPromptResetIntervalMs(scope: PromptScope = "engine"): number {
   return scope === "image" ? IMAGE_RESET_INTERVAL_MS : PROMPT_RESET_INTERVAL_MS;
@@ -132,7 +132,6 @@ export function normalizePromptSnapshot(raw: any, now = Date.now()): {
       resetAt[scope] = 0;
       changed = true;
     } else if (usage[scope] >= PROMPT_LIMITS[scope] && resetAt[scope] === 0) {
-      // Exhausted record without reset timestamp gets configured cooldown
       resetAt[scope] = now + getPromptResetIntervalMs(scope);
       changed = true;
     } else if (usage[scope] < PROMPT_LIMITS[scope] && resetAt[scope] !== 0) {
@@ -193,7 +192,6 @@ function writeSnapshotToStorage(
         }),
       );
     } catch {
-      // ignore storage errors
     }
   }
   return snapshot;
@@ -277,7 +275,6 @@ function writeLocalDeviceSnapshot(fp: string, snapshot: PromptLimitsSnapshot): P
         JSON.stringify(serializeProfilePromptPayload(snapshot)),
       );
     } catch {
-      // ignore storage errors
     }
   }
   return snapshot;
@@ -335,11 +332,6 @@ function mergeResetTimestamp(
   return Math.max(...candidates);
 }
 
-/**
- * Syncs an existing account's prompt usage from Firestore profile.
- * Keeps already-registered accounts isolated from other accounts' device usage,
- * and applies any due limit resets automatically.
- */
 export function syncPromptUsageFromCloud(uid: string, cloudRaw: any): PromptUsage {
   const now = Date.now();
   const localSnap = readPromptSnapshot(uid);
@@ -368,10 +360,6 @@ export function syncPromptUsageFromCloud(uid: string, cloudRaw: any): PromptUsag
   return mergedUsage;
 }
 
-/**
- * Computes inherited prompt usage for a newly registered account on this device.
- * Applies any due resets before inheriting remaining cooldowns.
- */
 export async function resolveRegistrationPromptUsage(
   newUid: string,
   precomputedFp?: string,
@@ -431,9 +419,6 @@ export function canUsePrompt(scope: PromptScope, uid?: string | null): boolean {
   return readPromptSnapshot(uid).usage[scope] < PROMPT_LIMITS[scope];
 }
 
-/**
- * Ensures an exhausted scope has a persisted reset timestamp and returns it.
- */
 export function ensureScopeResetTimestamp(scope: PromptScope, uid?: string | null): number {
   if (isScopeUnlimited(scope)) return 0;
   const keyUid = uid && uid.trim() ? uid.trim() : "guest";
@@ -452,9 +437,6 @@ export function ensureScopeResetTimestamp(scope: PromptScope, uid?: string | nul
   return nextReset;
 }
 
-/**
- * Marks a scope as exhausted locally & in cloud/device storage (e.g. when server quota reports limit reached).
- */
 export function markScopeExhausted(scope: PromptScope, uid?: string | null, resetAtMs?: number): number {
   if (isScopeUnlimited(scope)) return 0;
   const keyUid = uid && uid.trim() ? uid.trim() : "guest";
@@ -717,7 +699,6 @@ export function usePromptLimits(uid?: string | null): UsePromptLimitsResult {
     };
   }, [keyUid]);
 
-  // Schedule an automatic state refresh right when the next cooldown expires
   useEffect(() => {
     const now = Date.now();
     const pending = SCOPES

@@ -49,14 +49,12 @@
 .light {
   --radius: 0.75rem;
 
-  /* Default crisp white canvas */
   --background: oklch(0.99 0.002 20);
   --foreground: oklch(0.12 0.01 20);
 
   --surface: oklch(0.965 0.003 20);
   --surface-elevated: oklch(0.935 0.005 20);
 
-  /* Monochrome black brand accent in light theme */
   --brand: #18181b;
   --brand-glow: #27272a;
   --brand-soft: rgba(24, 24, 27, 0.08);
@@ -93,7 +91,7 @@
 }
 
 .dark {
-  /* Minimalist near-black canvas */
+  
   --background: oklch(0.11 0.005 20);
   --foreground: oklch(0.96 0.005 20);
 
@@ -169,11 +167,6 @@
   }
 }
 
-/* ==============================================================
-   LOGO STYLING ACROSS THEMES:
-   - Dark theme: exact accent color via --brand mask fill
-   - Light theme: pure crisp black silhouette
-   ============================================================== */
 .logo-mark {
   display: inline-block;
   background-color: var(--brand, #ef4444);
@@ -213,7 +206,6 @@
   color: transparent;
 }
 
-/* Light theme: brand text becomes crisp monochrome black */
 .light .text-gradient-brand {
   background-image: linear-gradient(135deg, oklch(0.12 0.01 20), oklch(0.26 0.01 20));
   -webkit-background-clip: text;
@@ -226,10 +218,6 @@
   font-weight: 400;
   letter-spacing: -0.02em;
 }
-
-/* ==============================================================
-   PREMIUM GLASSMORPHISM SYSTEM (Borders, Refraction & Glows)
-   ============================================================== */
 
 @utility glass-card {
   background-color: oklch(0.14 0.006 20 / 0.55);
@@ -338,7 +326,6 @@
   box-shadow: inset 0 1px 1.5px 0 oklch(1 0 0 / 0.22), 0 4px 16px -3px oklch(0.55 0.22 27 / 0.35);
 }
 
-/* Light mode crystalline glass optical adjustments */
 .light .glass-card {
   background-color: oklch(0.99 0.003 20 / 0.7);
   border-color: oklch(0 0 0 / 0.1);
@@ -413,7 +400,6 @@
   box-shadow: inset 0 1px 1.5px 0 oklch(1 0 0 / 0.3), 0 10px 24px -3px oklch(0 0 0 / 0.25);
 }
 
-/* ---------- Chat markdown (assistant messages) ---------- */
 .prose {
   font-size: 15px;
   line-height: 1.7;
@@ -514,7 +500,6 @@
   border: 1px solid var(--color-border);
 }
 
-/* Hide scrollbar for clean horizontal tracks */
 .no-scrollbar::-webkit-scrollbar {
   display: none !important;
   width: 0 !important;
@@ -524,4 +509,3 @@
   -ms-overflow-style: none !important;
   scrollbar-width: none !important;
 }
-

@@ -26,6 +26,7 @@ import {
   loadCloudEngineProject,
   saveCloudEngineProject,
   deleteCloudEngineProject,
+  deleteCloudAndLocalChat,
   subscribeCloudLibraryFiles,
   fetchCloudChatMessagesForLibrary,
   renameCloudChatMediaItem,
@@ -49,10 +50,8 @@ import {
 } from "@/lib/prompt-limits";
 import { getDeviceFingerprint } from "@/lib/device-fingerprint";
 
-
 const TContext = createContext<(k: string) => string>((k) => k);
 const useT = () => useContext(TContext);
-
 
 import {
   ArrowUp,
@@ -121,6 +120,7 @@ import {
   Radio,
   Volume2,
   Palette,
+  Upload,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -134,6 +134,16 @@ import { getCachedCalendarToken, createCalendarEvent, saveLocalReminder, type Ca
 import { getCachedTasksToken, createGoogleTask, saveLocalTask } from "@/lib/google-tasks";
 import { getCachedGmailToken, sendGmailMessage, saveLocalEmail, connectGmail } from "@/lib/gmail";
 import { FlowView } from "@/components/flow/FlowView";
+import { LibraryPickerModal } from "@/components/LibraryPickerModal";
+import { ConfirmModal, type ConfirmDialogConfig } from "@/components/ConfirmModal";
+import {
+  addFileToUnifiedLibrary,
+  buildChatLibraryPayload,
+  collectLocalUnifiedLibrary,
+  fetchUnifiedLibraryItems,
+  toBase64DataUrlFromItem,
+  type UnifiedLibraryItem,
+} from "@/lib/unified-library";
 import { LimitCooldownCard, type LimitCooldownPayload } from "@/components/ui/LimitCooldownCard";
 import {
   LongTextButton,
@@ -175,7 +185,6 @@ const navPrimary: { id: TabId; icon: typeof MessageSquare; label: string; soon?:
   { id: "wave", icon: AudioLines, label: "Wave", soon: true },
   { id: "docs", icon: FileCode, label: "Docs" },
 ];
-
 
 type LangCode = I18nLang;
 const LANGUAGES: { code: LangCode; label: string; native: string; flag: string }[] = [
@@ -269,13 +278,9 @@ type ChatMessage = {
   limitCooldown?: LimitCooldownPayload;
 };
 
-
-// ---------------------------------------------------------------------------
-// Гостевой режим (заглушка без БД): локальный аккаунт и локальная история чатов.
-// ---------------------------------------------------------------------------
 const GUEST_ID = "guest";
-const GUEST_KEY = "igseek:guest";         // { name, at }
-const GUEST_STORE_KEY = "igseek:guest-store"; // { chats, messages }
+const GUEST_KEY = "igseek:guest";
+const GUEST_STORE_KEY = "igseek:guest-store";
 
 type GuestStoredMessage = {
   id: string;
@@ -312,8 +317,6 @@ function readGuestStore(): GuestStore {
     if (raw) {
       const parsed = JSON.parse(raw) as GuestStore;
       if (Array.isArray(parsed.chats) && parsed.messages && typeof parsed.messages === "object") {
-        // Защита от дублей (раньше сообщения могли записываться дважды из-за
-        // двойного вызова React-апдейтера в StrictMode) — дедупликация по id.
         for (const [chatId, list] of Object.entries(parsed.messages)) {
           const seen = new Set<string>();
           parsed.messages[chatId] = (Array.isArray(list) ? list : []).filter((m) => {
@@ -326,7 +329,6 @@ function readGuestStore(): GuestStore {
       }
     }
   } catch {
-    // ignore corrupted store
   }
   return { chats: [], messages: {} };
 }
@@ -335,7 +337,6 @@ function writeGuestStore(store: GuestStore) {
   try {
     window.localStorage.setItem(GUEST_STORE_KEY, JSON.stringify(store));
   } catch {
-    // storage full — ignore
   }
 }
 
@@ -353,7 +354,6 @@ function writeGuestProjects(projects: Array<{ id: string; name: string; updated_
   try {
     window.localStorage.setItem(GUEST_PROJECTS_KEY, JSON.stringify(projects));
   } catch {
-    // ignore
   }
 }
 
@@ -386,8 +386,6 @@ function Index() {
   const [agent, setAgent] = useState<AgentId>("universal");
   const [agentOpen, setAgentOpen] = useState(false);
 
-
-  // Chat state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [generatingChatIds, setGeneratingChatIds] = useState<Set<string>>(new Set());
   const [engineGeneratingChatIds, setEngineGeneratingChatIds] = useState<Set<string>>(new Set());
@@ -470,9 +468,15 @@ function Index() {
     body?: string;
     attachments?: Array<{ filename: string; mimeType?: string; dataUrl?: string }>;
   } | null>(null);
+  const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
+  const libraryPickerCallbackRef = useRef<((item: UnifiedLibraryItem & { resolvedDataUrl?: string }) => void) | null>(null);
+  const openLibraryPicker = (onSelect: (item: UnifiedLibraryItem & { resolvedDataUrl?: string }) => void) => {
+    libraryPickerCallbackRef.current = onSelect;
+    setLibraryPickerOpen(true);
+  };
+  const deletedChatIdsRef = useRef<Set<string>>(new Set());
+  const [confirmConfig, setConfirmConfig] = useState<ConfirmDialogConfig | null>(null);
 
-
-  // Prefs
   useEffect(() => {
     setHydrated(true);
     const savedTheme = (window.localStorage.getItem("igseek:theme") as "dark" | "light" | null) ?? "light";
@@ -486,7 +490,6 @@ function Index() {
     setAgent(savedAgent);
   }, []);
 
-  // Open HUD from inline "memory updated" chip & Gmail auth modal & Google onboarding
   useEffect(() => {
     const onOpen = () => { setMemoryOpen(true); setMemoryPulse(0); };
     const onNav = (e: CustomEvent) => { if (e.detail) setTab(e.detail as TabId); };
@@ -511,16 +514,12 @@ function Index() {
     };
   }, []);
 
-  // Desktop sidebar collapse: default closed unless explicitly opened in this version
   useEffect(() => {
     try {
       window.localStorage.setItem("igseek:sidebar_v2", sidebarOpen ? "1" : "0");
     } catch {}
   }, [sidebarOpen]);
 
-
-
-  // Real-time cloud sync for Library files created via Flow
   useEffect(() => {
     if (!user || isGuest || user.id === GUEST_ID) return;
     const unsub = subscribeCloudLibraryFiles(user.id, replaceFlowLibraryFilesFromCloud);
@@ -538,7 +537,6 @@ function Index() {
     }
   };
 
-  // Auth: subscribe, then hydrate
   useEffect(() => {
     let cancelled = false;
     let activeLoadUid: string | null = null;
@@ -559,7 +557,6 @@ function Index() {
         .eq("id", authUser.id)
         .maybeSingle();
       if (!profile && !cancelled) {
-        // Brief retry in case signUp / signInWithGoogle setDoc is mid-flight
         await new Promise((r) => setTimeout(r, 300));
         if (cancelled) return;
         const retryRes = await supabase
@@ -602,7 +599,6 @@ function Index() {
         Boolean(profile?.needs_accent_onboarding) || pendingOnboardingUidRef.current === authUser.id,
       );
       setAuthReady(true);
-      // Sync preferences from DB (migrate legacy default theme/lang once to light/en)
       if (profile) {
         let dbTheme: "light" | "dark" = profile.theme === "dark" ? "dark" : "light";
         let dbLang: LangCode = (profile.lang as LangCode) || "en";
@@ -637,7 +633,6 @@ function Index() {
         syncPromptUsageFromCloud(authUser.id, profile.prompt_usage || profile.promptUsage);
       }
       setPrefsHydrated(true);
-      // Load chat list, projects, and cloud Engine IDs
       void refreshChats(authUser.id);
       void refreshProjects(authUser.id);
       void listCloudEngineProjectIds(authUser.id).then((ids) => {
@@ -659,12 +654,9 @@ function Index() {
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.user) {
-        // Defer database calls out of the auth callback to avoid locking the client.
         setTimeout(() => loadProfile(session.user), 0);
         return;
       }
-      // INITIAL_SESSION can briefly be null while a redirect session is being restored.
-      // Only clear an established account after a real sign-out event.
       if (event === "SIGNED_OUT") {
         clearLocalUserCaches();
         try {
@@ -720,7 +712,9 @@ function Index() {
       .eq("user_id", id)
       .order("updated_at", { ascending: false })
       .limit(200);
-    const rows = (data ?? []) as Array<ChatRow & { chat_type?: string }>;
+    const rows = ((data ?? []) as Array<ChatRow & { chat_type?: string }>).filter(
+      (c) => !deletedChatIdsRef.current.has(c.id),
+    );
     setChats(rows);
     const cloudEngineIds = rows
       .filter((c) => c.chat_type === "engine" || c.id.startsWith("engine-"))
@@ -911,9 +905,6 @@ function Index() {
     setTab("chat");
   };
 
-
-
-  // Auto-grow the bottom composer textarea smoothly to fit written text
   const syncComposerHeight = useAutoResizeTextarea(composerRef, input, {
     maxViewportFraction: 0.55,
     deps: [tab, messages.length > 0],
@@ -936,7 +927,6 @@ function Index() {
     window.localStorage.setItem("igseek:agent", agent);
   }, [agent, hydrated]);
 
-  // Sync preferences to profile when signed in (debounced)
   useEffect(() => {
     if (!user || !prefsHydrated || isGuest) return;
     const uid = user.id;
@@ -949,7 +939,6 @@ function Index() {
     return () => clearTimeout(handle);
   }, [user, prefsHydrated, isGuest, theme, accent, lang, model, agent]);
 
-
   const requireAuth = (fn?: () => void) => {
     if (!user) {
       setAuthOpen(true);
@@ -960,7 +949,6 @@ function Index() {
 
   const signOut = async () => {
     if (isGuest) {
-      // Выход из гостевого режима: убираем локальный аккаунт, история остаётся в localStorage.
       window.localStorage.removeItem(GUEST_KEY);
       setUser(null);
       setChats([]);
@@ -995,7 +983,6 @@ function Index() {
 
   const handleAuthed = () => {
     setAuthOpen(false);
-    // profile is loaded by the onAuthStateChange subscriber
   };
 
   const isAuthed = !!user;
@@ -1003,7 +990,6 @@ function Index() {
   const usageUid = user && !isGuest && user.id !== GUEST_ID ? user.id : "guest";
   const t = useMemo(() => makeT(lang), [lang]);
 
-  // Единое состояние вложений композера (фото + файлы) — отображается чипами над композером.
   type ChatAttachmentItem = {
     id: string;
     kind: "image" | "file";
@@ -1023,7 +1009,6 @@ function Index() {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   };
 
-  // Единый поток вложений: кнопка выбора файла, Ctrl+V и drag & drop.
   const attachFiles = async (files: File[]) => {
     if (!files.length) return;
     if (!isAuthed) { setAuthOpen(true); return; }
@@ -1058,12 +1043,10 @@ function Index() {
                 ],
           );
         } catch {
-          // ignore unreadable image
         }
         continue;
       }
 
-      // Не-изображения (PDF, DOCX, XLSX, TXT, код, архивы и т.п.) отображаем карточкой вложения на композере.
       const attachmentId = crypto.randomUUID();
       setAttachments((prev) =>
         prev.length >= 8
@@ -1113,7 +1096,6 @@ function Index() {
     }
   };
 
-  // Auto-scroll on new message chunks — только если пользователь у нижнего края.
   useEffect(() => {
     if (stickToBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -1149,7 +1131,6 @@ function Index() {
   };
 
   const newChat = () => {
-    // Не прерываем генерацию в текущем чате — она продолжит выполняться в фоне!
     setMessages([]);
     setInput("");
     setAttachments([]);
@@ -1163,7 +1144,6 @@ function Index() {
     activeChatIdRef.current = chatId;
     setAttachments([]);
 
-    // Если этот чат прямо сейчас генерирует ответ в фоне — мгновенно восстанавливаем текущий поток!
     const activeJob = backgroundJobsRef.current.get(chatId);
     if (activeJob) {
       setMessages([...activeJob.baseMessages, activeJob.assistantMsg]);
@@ -1212,6 +1192,8 @@ function Index() {
 
   const deleteChat = async (chatId: string) => {
     if (!user) return;
+    deletedChatIdsRef.current.add(chatId);
+
     const activeJob = backgroundJobsRef.current.get(chatId);
     if (activeJob) {
       activeJob.controller.abort();
@@ -1229,37 +1211,26 @@ function Index() {
         try { window.localStorage.setItem("igseek:engine_chat_ids", JSON.stringify(Array.from(next))); } catch {}
         return next;
       });
-      try { window.localStorage.removeItem("igseek:engine_proj_" + chatId); } catch {}
       if (activeEngineChatId === chatId) {
         setActiveEngineChatId(null);
       }
     }
-    if (isGuest) {
-      const store = readGuestStore();
-      store.chats = store.chats.filter((c) => c.id !== chatId);
-      delete store.messages[chatId];
-      writeGuestStore(store);
-      setChats(store.chats);
-      if (activeChatId === chatId) {
-        setActiveChatId(null);
-        activeChatIdRef.current = null;
-        setMessages([]);
-      }
+
+    setChats((prev) => prev.filter((c) => c.id !== chatId));
+    if (activeChatId === chatId) {
+      setActiveChatId(null);
+      activeChatIdRef.current = null;
+      setMessages([]);
+    }
+
+    const res = await deleteCloudAndLocalChat(user.id, chatId);
+    if (!res.ok) {
+      deletedChatIdsRef.current.delete(chatId);
+      void refreshChats(user.id);
+      toast.error(t("Failed to delete chat from cloud"));
       return;
     }
-    await supabase.from("chat_messages").delete().eq("chat_id", chatId);
-    if (user.id !== GUEST_ID) {
-      void deleteCloudEngineProject(user.id, chatId);
-    }
-    const { error } = await supabase.from("chats").delete().eq("id", chatId);
-    if (!error) {
-      setChats((prev) => prev.filter((c) => c.id !== chatId));
-      if (activeChatId === chatId) {
-        setActiveChatId(null);
-        activeChatIdRef.current = null;
-        setMessages([]);
-      }
-    }
+    toast.success(t("Chat deleted"));
   };
 
   const renameChat = async (chatId: string, title: string) => {
@@ -1274,8 +1245,6 @@ function Index() {
     await supabase.from("chats").update({ title: clean }).eq("id", chatId);
   };
 
-
-  // Streams assistant response for a given base message list and persists the assistant row in background.
   const runAssistantTurn = async (
     baseMessages: ChatMessage[],
     chatId: string | null,
@@ -1314,9 +1283,12 @@ function Index() {
     };
 
     try {
-      const [{ data: sessionData }, deviceFp] = await Promise.all([
+      const [{ data: sessionData }, deviceFp, unifiedLibItems] = await Promise.all([
         supabase.auth.getSession(),
         getDeviceFingerprint().catch(() => ""),
+        fetchUnifiedLibraryItems({ userId: user?.id, chats, projects }).catch(() =>
+          collectLocalUnifiedLibrary({ userId: user?.id, chats, projects }),
+        ),
       ]);
       const accessToken = sessionData.session?.access_token;
       const imageSnap = readPromptSnapshot(usageUid);
@@ -1354,6 +1326,7 @@ function Index() {
             dataUrl: a.dataUrl,
             type: a.mimeType || (a.dataUrl.startsWith("data:") ? a.dataUrl.slice(5, a.dataUrl.indexOf(";")) : "application/octet-stream"),
           })),
+          libraryFiles: buildChatLibraryPayload(unifiedLibItems),
           ...(previousGeneratedImage ? { previousGeneratedImage } : {}),
           ...(deviceFp ? { deviceFp } : {}),
           imageQuota: {
@@ -1375,7 +1348,7 @@ function Index() {
             const text = await res.text();
             errDetail = text.slice(0, 200) || errDetail;
           }
-        } catch { /* ignore */ }
+        } catch {  }
         throw new Error(errDetail);
       }
 
@@ -1384,7 +1357,7 @@ function Index() {
         let snippet = "";
         try {
           snippet = (await res.text()).slice(0, 200);
-        } catch { /* ignore */ }
+        } catch {  }
         throw new Error(
           contentType.includes("text/html")
             ? "API route /api/chat returned HTML instead of an event stream. Please ensure the backend server is running."
@@ -1417,19 +1390,19 @@ function Index() {
                   currentAssistantMsg.content = contentBuf;
                   if (reasoningBuf) currentAssistantMsg.reasoning = reasoningBuf;
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "reasoning") {
                 try {
                   reasoningBuf += JSON.parse(raw) as string;
                   currentAssistantMsg.reasoning = reasoningBuf;
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "artifact") {
                 try {
                   const art = JSON.parse(raw) as Artifact;
                   currentAssistantMsg.artifacts = [...(currentAssistantMsg.artifacts ?? []), art];
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "image_start") {
                 try {
                   const start = JSON.parse(raw) as { title?: string; prompt?: string };
@@ -1437,7 +1410,7 @@ function Index() {
                     currentAssistantMsg.pendingImage = { title: start.title, prompt: start.prompt };
                     updateLiveUi();
                   }
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "image") {
                 try {
                   const img = JSON.parse(raw) as GeneratedImage;
@@ -1445,14 +1418,14 @@ function Index() {
                   currentAssistantMsg.images = [...(currentAssistantMsg.images ?? []), img];
                   consumePrompt("image", usageUid);
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "photo_usage") {
                 try {
                   const quota = JSON.parse(raw) as { used?: number; limit?: number; resetAt?: number };
                   if (typeof quota.used === "number" && quota.used >= PROMPT_LIMITS.image) {
                     markScopeExhausted("image", usageUid, quota.resetAt);
                   }
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "image_limit") {
                 try {
                   const limitEvt = JSON.parse(raw) as {
@@ -1469,13 +1442,13 @@ function Index() {
                     resetAt: effectiveReset,
                   };
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "web_image") {
                 try {
                   const webImgPayload = JSON.parse(raw) as WebImagePayload;
                   currentAssistantMsg.webImages = [...(currentAssistantMsg.webImages ?? []), webImgPayload];
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "calendar_event") {
                 try {
                   const evt = JSON.parse(raw) as CalendarEventPayload;
@@ -1487,7 +1460,7 @@ function Index() {
                   } else {
                     saveLocalReminder(evt);
                   }
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "task_event") {
                 try {
                   const taskEvt = JSON.parse(raw);
@@ -1499,7 +1472,7 @@ function Index() {
                   } else {
                     saveLocalTask(taskEvt);
                   }
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "gmail_event") {
                 try {
                   const gmailEvt = JSON.parse(raw);
@@ -1525,19 +1498,19 @@ function Index() {
                       )
                       .catch(() => saveLocalEmail(gmailEvt));
                   }
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "refusal_event") {
                 try {
                   const refEvt = JSON.parse(raw);
                   currentAssistantMsg.refusals = [...(currentAssistantMsg.refusals ?? []), refEvt];
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "tab_transition_event") {
                 try {
                   const transEvt = JSON.parse(raw);
                   currentAssistantMsg.tabTransitions = [...(currentAssistantMsg.tabTransitions ?? []), transEvt];
                   updateLiveUi();
-                } catch { /* ignore */ }
+                } catch {  }
               } else if (currentEvent === "memory_updated") {
                 window.dispatchEvent(new CustomEvent("igseek:memory-updated"));
                 setMemoryPulse((n) => n + 1);
@@ -1597,7 +1570,7 @@ function Index() {
         });
 
         const asst = currentAssistantMsg;
-        if (user) {
+        if (user && !deletedChatIdsRef.current.has(chatId)) {
           const forGuest = isGuest || user.id === GUEST_ID;
           if (forGuest) {
             const store = readGuestStore();
@@ -1637,7 +1610,7 @@ function Index() {
                 });
                 await supabase.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
                 void refreshChats();
-              } catch { /* ignore */ }
+              } catch {  }
             })();
           }
         }
@@ -1652,7 +1625,6 @@ function Index() {
     if (isLocked) { setProfileOpen(true); return; }
 
     const currentAttachments = [...attachments];
-    // Картинки-чипы -> markdown, файлы -> скрытая мета-обёртка <!--IGFILE:...--> с текстом внутри.
     const imageMd = currentAttachments
       .filter((a) => a.kind === "image")
       .map((a) => `![${a.name}](${a.dataUrl})`)
@@ -1764,7 +1736,6 @@ function Index() {
     await runAssistantTurn(nextMessages, chatId, assistantMsg, positionBase + 1, currentAttachments, receipt);
   };
 
-  // Edit a user message: truncate everything after it, save the edit, regenerate the assistant reply.
   const editMessage = async (msgId: string, newText: string) => {
     const trimmed = newText.trim();
     if (!trimmed) return;
@@ -1820,8 +1791,6 @@ function Index() {
     await runAssistantTurn(baseMessages, activeChatId, assistantMsg, idx + 1, [], receipt);
   };
 
-  // Delete a message pair: deleting a user message removes it and the AI reply;
-  // deleting an assistant message similarly removes it and the corresponding user message.
   const deleteMessage = async (msgId: string) => {
     const idx = messages.findIndex((m) => m.id === msgId);
     if (idx < 0) return;
@@ -1864,7 +1833,6 @@ function Index() {
     }
   };
 
-  // Update any message text in-place (user or assistant) without wiping conversation history.
   const updateMessageText = async (msgId: string, newText: string) => {
     setMessages((prev) =>
       prev.map((m) => (m.id === msgId ? { ...m, content: newText } : m)),
@@ -1884,11 +1852,6 @@ function Index() {
     toast.success(t("Message text updated"));
   };
 
-
-
-
-
-
   if (!hydrated || !authReady) {
     return (
       <TContext.Provider value={t}>
@@ -1902,7 +1865,6 @@ function Index() {
     );
   }
 
-  // Экран авторизации (Google + Email / Пароль + Регистрация с подтверждением пароля)
   if (!user) {
     return (
       <TContext.Provider value={t}>
@@ -1947,8 +1909,6 @@ function Index() {
         }
       }}
     >
-      {/* ============ SIDEBAR ============ */}
-      {/* Mobile backdrop */}
       {mobileNavOpen && (
         <div
           className="fixed inset-0 z-40 bg-background/70 backdrop-blur-sm md:hidden"
@@ -1960,7 +1920,6 @@ function Index() {
           sidebarOpen ? "md:w-[260px] border-r border-zinc-200 dark:border-border" : "md:w-0 md:border-r-0"
         }`}
       >
-        {/* Sidebar Header */}
         <div className="flex w-[280px] md:w-[260px] shrink-0 items-center justify-between px-3.5 py-3 border-b border-zinc-200 dark:border-white/5">
           <div className="flex items-center gap-2 select-none">
             <span
@@ -1975,7 +1934,6 @@ function Index() {
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            {/* Language switcher */}
             <div className="relative">
               <button
                 onClick={() => setLangOpen((v) => !v)}
@@ -2018,7 +1976,6 @@ function Index() {
               </AnimatePresence>
             </div>
 
-            {/* Theme toggle */}
             <button
               onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
               className="flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 hover:bg-zinc-200/80 dark:bg-[#161618]/80 dark:hover:bg-[#1f1f23] text-zinc-700 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white transition-colors"
@@ -2028,7 +1985,6 @@ function Index() {
               {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
 
-            {/* Close sidebar button */}
             <button
               onClick={() => {
                 if (mobileNavOpen) setMobileNavOpen(false);
@@ -2045,7 +2001,6 @@ function Index() {
 
         <div className="flex-1 min-h-0 w-[280px] md:w-[260px] overflow-y-auto overscroll-contain px-3 py-3">
           <div className="flex flex-col gap-2 w-full">
-            {/* New chat */}
             <button
               onClick={() => { requireAuth(() => { setTab("chat"); newChat(); }); setMobileNavOpen(false); }}
               className="w-full rounded-full border border-zinc-200 dark:border-white/10 bg-zinc-100 hover:bg-zinc-200/80 dark:bg-[#161618]/90 dark:hover:bg-[#1f1f23] text-zinc-900 dark:text-white px-4 py-2.5 flex items-center gap-3 text-sm font-medium transition-all shadow-sm active:scale-98"
@@ -2054,7 +2009,6 @@ function Index() {
               <span className="whitespace-nowrap">{t("New chat")}</span>
             </button>
 
-            {/* Memory */}
             <button
               onClick={() => { requireAuth(() => setMemoryOpen(true)); setMemoryPulse(0); }}
               className={`w-full rounded-full border border-zinc-200 dark:border-white/10 bg-zinc-100 hover:bg-zinc-200/80 dark:bg-[#161618]/90 dark:hover:bg-[#1f1f23] text-zinc-900 dark:text-white px-4 py-2.5 flex items-center justify-between text-sm font-medium transition-all shadow-sm active:scale-98 ${
@@ -2073,7 +2027,6 @@ function Index() {
               )}
             </button>
 
-            {/* Search */}
             <div className="relative w-full">
               <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 dark:text-zinc-500" />
               <input
@@ -2085,9 +2038,7 @@ function Index() {
               />
             </div>
 
-            {/* Navigation Primary */}
             <nav className="mt-1 flex flex-col gap-1 w-full">
-              {/* Chat */}
               <button
                 onClick={() => { setTab("chat"); setMobileNavOpen(false); }}
                 className={`w-full rounded-full px-4 py-2.5 flex items-center gap-3 text-sm font-medium transition-all ${
@@ -2100,9 +2051,6 @@ function Index() {
                 <span className="text-left whitespace-nowrap">{t("Chat")}</span>
               </button>
 
-
-
-              {/* Other Primary Items */}
               {navPrimary
                 .filter((n) => n.id !== "chat")
                 .map(({ id, icon: Icon, label, soon }) => {
@@ -2129,10 +2077,8 @@ function Index() {
               })}
             </nav>
 
-            {/* Divider */}
             <div className="my-2 border-t border-zinc-200 dark:border-white/10 w-full" />
 
-            {/* Recent chats */}
             <div className="w-full">
               <div className="px-3 pb-1.5 text-[11px] uppercase tracking-wider text-zinc-500 font-medium select-none">
                 {t("Recent")}
@@ -2198,17 +2144,30 @@ function Index() {
                           </button>
                         )}
                         {!isEditing && (
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-0.5 shrink-0">
                             <button
+                              type="button"
                               onClick={(e) => { e.stopPropagation(); setEditingChatId(c.id); setEditingTitle(c.title); }}
-                              className="p-1 rounded-md text-zinc-400 hover:text-zinc-900 dark:text-zinc-500 dark:hover:text-white transition-colors"
+                              className="flex min-h-[34px] min-w-[34px] sm:min-h-[28px] sm:min-w-[28px] items-center justify-center rounded-md text-zinc-400 hover:text-zinc-900 dark:text-zinc-500 dark:hover:text-white transition-colors cursor-pointer"
                               title={t("Rename")}
                             >
                               <Pencil className="h-3 w-3" />
                             </button>
                             <button
-                              onClick={(e) => { e.stopPropagation(); if (confirm(t("Delete this chat?"))) void deleteChat(c.id); }}
-                              className="p-1 rounded-md text-zinc-400 hover:text-[var(--brand)] dark:text-zinc-500 dark:hover:text-[var(--brand)] transition-colors"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmConfig({
+                                  title: t("Delete chat"),
+                                  itemLabel: c.title || t("New chat"),
+                                  description: t("Chat and all messages will be deleted from this device and IGseek cloud."),
+                                  confirmLabel: t("Delete"),
+                                  cancelLabel: t("Cancel"),
+                                  variant: "danger",
+                                  onConfirm: () => deleteChat(c.id),
+                                });
+                              }}
+                              className="flex min-h-[34px] min-w-[34px] sm:min-h-[28px] sm:min-w-[28px] items-center justify-center rounded-md text-zinc-400 hover:text-red-500 dark:text-zinc-500 dark:hover:text-red-400 transition-colors cursor-pointer"
                               title={t("Delete")}
                             >
                               <Trash2 className="h-3 w-3" />
@@ -2233,7 +2192,6 @@ function Index() {
           </div>
         </div>
 
-        {/* Profile Bottom Card */}
         <div className="shrink-0 border-t border-zinc-200 dark:border-white/10 p-3">
           {isAuthed ? (
             <button
@@ -2264,7 +2222,6 @@ function Index() {
         </div>
       </aside>
 
-      {/* ============ MAIN ============ */}
       <main className="relative flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.04]"
@@ -2275,7 +2232,6 @@ function Index() {
           }}
         />
 
-        {/* Top bar (Flow renders its own studio header with sidebar toggle) */}
         {tab !== "flow" && (
           <header className="shrink-0 relative z-40 flex items-center justify-between px-3 py-2.5 md:px-5 md:py-3.5">
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -2293,7 +2249,6 @@ function Index() {
           </header>
         )}
 
-        {/* Content */}
         <div
           className={`relative z-10 flex-1 min-h-0 scroll-smooth overscroll-contain ${tab === "engine" ? "overflow-hidden flex flex-col" : "overflow-y-auto"}`}
           onScroll={(e) => {
@@ -2319,6 +2274,36 @@ function Index() {
                     attachments={attachments}
                     onRemoveAttachment={removeAttachment}
                     onAttach={() => fileInputRef.current?.click()}
+                    onOpenLibraryPicker={() =>
+                      openLibraryPicker((item) => {
+                        const resolvedUrl = item.resolvedDataUrl || toBase64DataUrlFromItem(item) || item.dataUrl || "";
+                        const isImg = item.type === "image";
+                        const approxBytes = item.content ? item.content.length : Math.round((resolvedUrl.length * 3) / 4);
+                        setAttachments((prev) =>
+                          prev.length >= 8
+                            ? prev
+                            : [
+                                ...prev,
+                                {
+                                  id: crypto.randomUUID(),
+                                  kind: isImg ? "image" : "file",
+                                  name: item.name,
+                                  mimeType: item.mimeType || (isImg ? "image/png" : "text/plain"),
+                                  sizeLabel: formatFileSize(Math.max(1024, approxBytes)),
+                                  dataUrl: resolvedUrl,
+                                  ...(!isImg
+                                    ? {
+                                        parsedContent: item.content
+                                          ? `📄 **${item.name}** (из Library):\n\n${item.content.slice(0, 80000)}`
+                                          : `📎 **${item.name}** (из Library)`,
+                                      }
+                                    : {}),
+                                },
+                              ],
+                        );
+                        toast.success(`${t("Attached from Library:")} ${item.name}`);
+                      })
+                    }
                     onRequireAuth={() => setAuthOpen(true)}
                     onLocked={() => setProfileOpen(true)}
                     messages={messages}
@@ -2330,7 +2315,6 @@ function Index() {
                     onDelete={deleteMessage}
                     messagesEndRef={messagesEndRef}
                   />
-
 
                 </motion.div>
               )}
@@ -2373,6 +2357,7 @@ function Index() {
                 onCreateRegularChatInProject={createRegularChatInProject}
                 engineChatIds={engineChatIds}
                 userId={user?.id ?? null}
+                onRequestConfirm={setConfirmConfig}
               /></TabWrap>}
               {tab === "saved" && <TabWrap key="saved"><SavedView
                 isAuthed={isAuthed}
@@ -2380,6 +2365,33 @@ function Index() {
                 chats={chats.filter((c) => c.is_saved)}
                 onOpenChat={(id) => { void loadChat(id); }}
                 onUnsave={(id) => { void toggleSaveChat(id, false); }}
+                onOpenLibrary={() => setTab("library")}
+                onOpenLibraryPicker={() =>
+                  openLibraryPicker((item) => {
+                    const resolvedUrl = item.resolvedDataUrl || toBase64DataUrlFromItem(item) || item.dataUrl || "";
+                    const isImg = item.type === "image";
+                    setAttachments((prev) =>
+                      prev.length >= 8
+                        ? prev
+                        : [
+                            ...prev,
+                            {
+                              id: crypto.randomUUID(),
+                              kind: isImg ? "image" : "file",
+                              name: item.name,
+                              mimeType: item.mimeType || (isImg ? "image/png" : "text/plain"),
+                              sizeLabel: formatFileSize(Math.max(1024, item.content?.length || 2048)),
+                              dataUrl: resolvedUrl,
+                              ...(!isImg
+                                ? { parsedContent: item.content ? `📄 **${item.name}** (из Library):\n\n${item.content.slice(0, 80000)}` : `📎 **${item.name}**` }
+                                : {}),
+                            },
+                          ],
+                    );
+                    setTab("chat");
+                    toast.success(`${t("Attached from Library:")} ${item.name}`);
+                  })
+                }
               /></TabWrap>}
 
               {tab === "engine" && (
@@ -2404,7 +2416,10 @@ function Index() {
                     onCreateProject={createProject}
                     onAssignChat={assignChatToProject}
                     onNavigateToLibrary={() => setTab("library")}
+                    onOpenLibraryPicker={(handler) => openLibraryPicker(handler)}
+                    onRequestConfirm={setConfirmConfig}
                     onSaveEngineChat={(id, title, userText, asstText, currentFiles, currentMessages, targetProjectId) => {
+                      if (deletedChatIdsRef.current.has(id)) return;
                       markEngineChatId(id);
                       const now = new Date().toISOString();
                       const existingChat = chats.find((c) => c.id === id);
@@ -2463,13 +2478,12 @@ function Index() {
                   />
                 </TabWrap>
               )}
-              {tab === "wave" && <TabWrap key="wave"><WaveView onGoToChat={() => setTab("chat")} /></TabWrap>}
-              {tab === "docs" && <TabWrap key="docs"><DocsView /></TabWrap>}
+              {tab === "wave" && <TabWrap key="wave"><WaveView onGoToChat={() => setTab("chat")} onOpenLibrary={() => setTab("library")} /></TabWrap>}
+              {tab === "docs" && <TabWrap key="docs"><DocsView onOpenLibrary={() => setTab("library")} /></TabWrap>}
             </AnimatePresence>
           </div>
         </div>
 
-        {/* Hidden file input — always mounted so both the hero pill and the composer can attach files */}
         <input
           ref={fileInputRef}
           type="file"
@@ -2482,7 +2496,6 @@ function Index() {
           }}
         />
 
-        {/* ============ COMPOSER ============ */}
         {tab === "chat" && messages.length > 0 && (
           <div className="shrink-0 z-30 px-2 sm:px-4 pb-3 sm:pb-4 pt-1 bg-background/95 dark:bg-background/90 backdrop-blur-md">
             <div className="mx-auto w-full max-w-3xl">
@@ -2523,7 +2536,6 @@ function Index() {
                 className="relative flex items-end gap-1 sm:gap-1.5 rounded-[26px] border border-zinc-200 dark:border-white/10 bg-white/95 dark:bg-[#141416]/95 p-1 pl-2 sm:p-1.5 sm:pl-3 shadow-lg shadow-zinc-900/5 dark:shadow-2xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-colors w-full"
               >
 
-                {/* Paperclip */}
                 <button
                   type="button"
                   onClick={() => {
@@ -2537,7 +2549,46 @@ function Index() {
                   <Paperclip className="h-4 w-4" />
                 </button>
 
-                {/* Input */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isAuthed) { setAuthOpen(true); return; }
+                    if (isLocked) { setProfileOpen(true); return; }
+                    openLibraryPicker((item) => {
+                      const resolvedUrl = item.resolvedDataUrl || toBase64DataUrlFromItem(item) || item.dataUrl || "";
+                      const isImg = item.type === "image";
+                      const approxBytes = item.content ? item.content.length : Math.round((resolvedUrl.length * 3) / 4);
+                      setAttachments((prev) =>
+                        prev.length >= 8
+                          ? prev
+                          : [
+                              ...prev,
+                              {
+                                id: crypto.randomUUID(),
+                                kind: isImg ? "image" : "file",
+                                name: item.name,
+                                mimeType: item.mimeType || (isImg ? "image/png" : "text/plain"),
+                                sizeLabel: formatFileSize(Math.max(1024, approxBytes)),
+                                dataUrl: resolvedUrl,
+                                ...(!isImg
+                                  ? {
+                                      parsedContent: item.content
+                                        ? `📄 **${item.name}** (из Library):\n\n${item.content.slice(0, 80000)}`
+                                        : `📎 **${item.name}** (из Library)`,
+                                    }
+                                  : {}),
+                              },
+                            ],
+                      );
+                      toast.success(`${t("Attached from Library:")} ${item.name}`);
+                    });
+                  }}
+                  title={t("Select from Library")}
+                  className="flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors cursor-pointer"
+                >
+                  <BookOpen className="h-4 w-4" />
+                </button>
+
                 <textarea
                   ref={composerRef}
                   value={input}
@@ -2565,7 +2616,6 @@ function Index() {
                   className="min-h-[32px] sm:min-h-[36px] flex-1 min-w-0 resize-none overflow-hidden bg-transparent px-1.5 py-1.5 sm:py-2 text-[13.5px] sm:text-[15px] leading-5 text-zinc-900 dark:text-white placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
                 />
 
-                {/* Mic circular button */}
                 <button
                   type="button"
                   onClick={() => {
@@ -2613,7 +2663,6 @@ function Index() {
                   {listening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
                 </button>
 
-                {/* Brain reasoning button */}
                 <button
                   type="button"
                   onClick={() => { if (!isAuthed) { setAuthOpen(true); return; } setThinking((v) => !v); }}
@@ -2623,7 +2672,6 @@ function Index() {
                   <Brain className={`h-3.5 w-3.5 ${thinking ? "text-black dark:text-[var(--brand)] font-bold" : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"}`} />
                 </button>
 
-                {/* Web search button */}
                 <button
                   type="button"
                   onClick={() => { if (!isAuthed) { setAuthOpen(true); return; } setWebSearch((v) => !v); }}
@@ -2635,7 +2683,6 @@ function Index() {
                   <Globe className="h-3.5 w-3.5" />
                 </button>
 
-                {/* Composer Buttons: Stop button side by side with Send button */}
                 <div className="flex items-center gap-1.5 shrink-0">
                   {isSending && (
                     <button
@@ -2680,6 +2727,7 @@ function Index() {
                 void supabase.from("profiles").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", user.id);
               }
             }}
+            onRequestConfirm={setConfirmConfig}
           />
         )}
       </AnimatePresence>
@@ -2699,6 +2747,19 @@ function Index() {
           />
         )}
       </AnimatePresence>
+      <LibraryPickerModal
+        open={libraryPickerOpen}
+        onClose={() => setLibraryPickerOpen(false)}
+        userId={user?.id ?? null}
+        chats={chats}
+        projects={projects}
+        t={t}
+        actionLabel={t("Select")}
+        onSelect={(item) => {
+          libraryPickerCallbackRef.current?.(item);
+        }}
+      />
+      <ConfirmModal config={confirmConfig} onClose={() => setConfirmConfig(null)} />
       <AnimatePresence>
         {user && !isGuest && needsAccentOnboarding && (
           <AccentOnboardingModal
@@ -2718,7 +2779,6 @@ function Index() {
                   })
                   .eq("id", user.id);
               } catch {
-                /* ignore transient error */
               }
               toast.success(t("Accent color saved"));
             }}
@@ -2823,7 +2883,6 @@ function ComposerAttachmentsTray({
   );
 }
 
-/* ---------- Tab wrapper ---------- */
 function TabWrap({ children }: { children: React.ReactNode }) {
   return (
     <motion.div
@@ -2837,7 +2896,6 @@ function TabWrap({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* ---------- Chat (hero + conversation) ---------- */
 function ChatView({
   isAuthed,
   isLocked,
@@ -2846,6 +2904,7 @@ function ChatView({
   attachments,
   onRemoveAttachment,
   onAttach,
+  onOpenLibraryPicker,
   onRequireAuth,
   onLocked,
   messages,
@@ -2864,6 +2923,7 @@ function ChatView({
   attachments: ChatAttachmentItem[];
   onRemoveAttachment: (id: string) => void;
   onAttach: () => void;
+  onOpenLibraryPicker?: () => void;
   onRequireAuth: () => void;
   onLocked: () => void;
   messages: ChatMessage[];
@@ -3014,10 +3074,8 @@ function ChatView({
     );
   }
 
-
   return (
     <>
-      {/* Background: Clean adaptive subtle grid */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden select-none">
         <div
           className="absolute inset-0 opacity-[0.03] dark:opacity-[0.04]"
@@ -3036,7 +3094,6 @@ function ChatView({
         transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
         className="relative z-10 flex flex-col items-center text-center w-full max-w-2xl mx-auto px-4"
       >
-        {/* Large Centered Fox Logo */}
         <div className="relative mb-5 flex items-center justify-center dark:drop-shadow-[0_0_28px_var(--brand-glow-shadow)]">
           <span
             role="img"
@@ -3046,19 +3103,16 @@ function ChatView({
           />
         </div>
 
-        {/* Headline: What are we seeking today? */}
         <h1 className="font-display text-4xl sm:text-5xl md:text-6xl text-zinc-900 dark:text-white font-normal tracking-tight">
           {t("What are we")}{" "}
           <span className="font-serif italic text-black dark:text-[var(--brand)] font-normal">{t("seeking")}</span>{" "}
           {t("today?")}
         </h1>
 
-        {/* Subtitle */}
         <p className="mt-3.5 max-w-md text-[14px] md:text-[15px] leading-relaxed text-zinc-600 dark:text-zinc-400">
           {t("Your AI research assistant — explore ideas, analyze signals, and create content that actually performs.")}
         </p>
 
-        {/* Center Pill Composer */}
         <div className="mt-8 flex w-full max-w-xl flex-col gap-2">
           {attachments.length > 0 && (
             <ComposerAttachmentsTray
@@ -3078,6 +3132,16 @@ function ChatView({
             >
               <Paperclip className="h-4 w-4" />
             </button>
+            {onOpenLibraryPicker && (
+              <button
+                type="button"
+                onClick={() => { if (guard()) onOpenLibraryPicker(); }}
+                title={t("Select from Library")}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:hover:text-white dark:hover:bg-white/5 transition-colors cursor-pointer"
+              >
+                <BookOpen className="h-4 w-4" />
+              </button>
+            )}
             <textarea
               ref={heroComposerRef}
               value={input}
@@ -3141,7 +3205,6 @@ function ChatView({
           }}
         />
 
-        {/* 4 Dynamic Random Prompt Suggestions (2x2 Grid) */}
         <div className="mt-6 sm:mt-7 grid grid-cols-2 gap-2 sm:gap-3 w-full max-w-xl">
           {welcomeChips.map((chip, idx) => (
             <button
@@ -3172,7 +3235,6 @@ const CodeBlock = memo(function CodeBlock({ code, language }: { code: string; la
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     } catch {
-      /* ignore */
     }
   };
   return (
@@ -3377,7 +3439,6 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
       transition={{ duration: 0.3 }}
       className="group relative flex items-center gap-3 overflow-hidden rounded-xl border border-border bg-surface/60 p-3 hover:border-brand/40 transition-colors"
     >
-      {/* subtle generation sweep — plays once on mount */}
       <motion.div
         aria-hidden
         initial={{ x: "-120%", opacity: 0.9 }}
@@ -3840,7 +3901,6 @@ function TabTransitionCard({
   );
 }
 
-
 function ImageGenerationPlaceholder({ title }: { title: string }) {
   const t = useT();
   return (
@@ -3874,7 +3934,6 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
       </div>
       <div className="p-2">
         <div className="relative flex h-48 w-full items-center justify-center overflow-hidden rounded-lg bg-background">
-          {/* Soft aurora glow */}
           <motion.div
             className="pointer-events-none absolute h-40 w-40 rounded-full bg-brand/20 blur-3xl"
             animate={{ scale: [1, 1.2, 1], opacity: [0.35, 0.6, 0.35] }}
@@ -3887,7 +3946,6 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
             style={{ rotate: 90 }}
           />
 
-          {/* Floating particles */}
           {[...Array(6)].map((_, i) => (
             <motion.div
               key={i}
@@ -3908,7 +3966,6 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
             />
           ))}
 
-          {/* Center icon with pulse ring */}
           <div className="relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-surface/80 shadow-sm">
             <motion.div
               className="absolute inset-0 rounded-2xl border border-brand/30"
@@ -3918,7 +3975,6 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
             <ImageIcon className="h-6 w-6 text-brand" />
           </div>
 
-          {/* Shimmer sweep */}
           <motion.div
             className="pointer-events-none absolute inset-0 z-20 opacity-20"
             style={{
@@ -3946,10 +4002,6 @@ function ImageGenerationPlaceholder({ title }: { title: string }) {
   );
 }
 
-
-// Разбирает содержимое сообщения пользователя: прикреплённые картинки
-// (markdown с data-URL) и файлы (<!--IGFILE:...-->) отдельными частями, остальное — текстом.
-// Служебная строка парсера («🖼️ имя (вес)») не показывается — только фото, файлы и текст.
 function splitUserContent(
   content: string,
 ): Array<
@@ -4020,9 +4072,6 @@ function readFileAsDataURL(file: File): Promise<string> {
   });
 }
 
-// Форматы, которые принимает vision-API DeepSeek. Всё остальное
-// (SVG, BMP, TIFF, HEIC…) растеризуем в PNG через canvas — иначе
-// сервер получает stream_failed и пользователь видит ошибку.
 const MODEL_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]);
 
 async function normalizeImageForModel(dataUrl: string): Promise<string> {
@@ -4046,11 +4095,10 @@ async function normalizeImageForModel(dataUrl: string): Promise<string> {
     const png = canvas.toDataURL("image/png");
     return png.length > 10 ? png : dataUrl;
   } catch {
-    return dataUrl; // не смогли декодировать — отправляем как есть
+    return dataUrl;
   }
 }
 
-// Название чата из первого сообщения: без markdown-картинок, файлов и base64-стен.
 function chatTitleFrom(text: string): string {
   const withoutAttachments = stripAttachmentsForLineCount(text).replace(/\s+/g, " ").trim();
   if (withoutAttachments) return withoutAttachments.slice(0, 60);
@@ -4075,7 +4123,6 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
       return true;
     }
   } catch {
-    // fallback below
   }
   try {
     const ta = document.createElement("textarea");
@@ -4262,12 +4309,10 @@ const MessageBubble = memo(function MessageBubble({
     try {
       window.getSelection()?.removeAllRanges();
     } catch {
-      /* ignore */
     }
     try {
       navigator.vibrate?.(12);
     } catch {
-      /* ignore */
     }
     backdropArmedRef.current = false;
     if (armTimerRef.current !== null) {
@@ -4778,9 +4823,6 @@ const MessageBubble = memo(function MessageBubble({
   );
 }, (prev, next) => prev.message === next.message && prev.isStreamingLast === next.isStreamingLast);
 
-
-
-/* ---------- Locked view helper ---------- */
 function LockedShell({
   title,
   description,
@@ -4831,7 +4873,6 @@ function LockedShell({
   );
 }
 
-/* ---------- Discover ---------- */
 type DiscoverItem = { tag: string; title: string; url: string; source: string };
 const DISCOVER_ITEMS: DiscoverItem[] = [
   { tag: "Trends", title: "Google Trends — real-time search trends", url: "https://trends.google.com/trends/", source: "trends.google.com" },
@@ -4880,7 +4921,6 @@ function DiscoverView() {
   );
 }
 
-/* ---------- Analytics ---------- */
 function AnalyticsView({ isAuthed, onRequireAuth }: { isAuthed: boolean; onRequireAuth: () => void }) {
   const t = useT();
   const bars = [42, 58, 36, 74, 66, 88, 71];
@@ -4921,7 +4961,6 @@ function AnalyticsView({ isAuthed, onRequireAuth }: { isAuthed: boolean; onRequi
   );
 }
 
-/* ---------- Library (Projects) ---------- */
 type ChatRow = { id: string; title: string; updated_at: string; is_saved: boolean; project_id: string | null };
 type ProjectRow = { id: string; name: string; updated_at: string };
 
@@ -4940,6 +4979,7 @@ function LibraryView({
   onCreateRegularChatInProject,
   engineChatIds,
   userId,
+  onRequestConfirm,
 }: {
   isAuthed: boolean;
   onRequireAuth: () => void;
@@ -4955,6 +4995,7 @@ function LibraryView({
   onCreateRegularChatInProject: (projectId: string) => void;
   engineChatIds?: Set<string>;
   userId: string | null;
+  onRequestConfirm?: (cfg: ConfirmDialogConfig) => void;
 }) {
   const t = useT();
   const [libTab, setLibTab] = useState<"files" | "projects">("files");
@@ -4972,14 +5013,12 @@ function LibraryView({
   const [addOpen, setAddOpen] = useState(false);
   const [cloudMediaMsgs, setCloudMediaMsgs] = useState<CloudChatMessageForLibrary[]>([]);
 
-  // Live listen for Flow updates & sync real disk files from sandbox /api/flow
   useEffect(() => {
     const onUpdated = () => setRefreshKey((k) => k + 1);
     window.addEventListener("igseek:library-updated", onUpdated);
     return () => window.removeEventListener("igseek:library-updated", onUpdated);
   }, []);
 
-  // Load cloud chat attachments / generated images / artifacts when signed into Firebase
   useEffect(() => {
     let cancelled = false;
     if (!userId || userId === GUEST_ID) {
@@ -5019,7 +5058,6 @@ function LibraryView({
           }
         }
       } catch {
-        // non-fatal offline fallback
       }
     })();
     return () => { cancelled = true; };
@@ -5035,7 +5073,6 @@ function LibraryView({
     [chats],
   );
 
-  // Load artifacts for open project
   useEffect(() => {
     let cancelled = false;
     if (!openProjectId || !userId || projectChats.length === 0) {
@@ -5075,7 +5112,6 @@ function LibraryView({
     return () => { cancelled = true; };
   }, [openProjectId, userId, projectChats]);
 
-  // Collect all files across all chats AND Flow-created files for Media Library
   const allLibraryFiles = useMemo(() => {
     const list: Array<{
       id: string;
@@ -5094,7 +5130,6 @@ function LibraryView({
       projectId?: string | null;
     }> = [];
 
-    // 1. Flow-created / sandbox Library files (synced in real time from Firestore when signed in)
     const flowFiles = readFlowLibraryFiles();
     const projNameMap = new Map<string, string>();
     projects.forEach((p) => projNameMap.set(p.id, p.name));
@@ -5127,7 +5162,6 @@ function LibraryView({
       const title = chatTitleMap.get(chatId) || t("Chat");
       for (const m of msgs) {
         if (!m) continue;
-        // 1. User uploaded markdown images/files ![name](dataUrl)
         if (m.content) {
           const matches = [...m.content.matchAll(/!\[([^\]]*)\]\((data:[^)]+)\)/g)];
           for (const match of matches) {
@@ -5146,7 +5180,6 @@ function LibraryView({
             });
           }
         }
-        // 2. AI Generated Images
         if (Array.isArray(m.images)) {
           for (const img of m.images) {
             list.push({
@@ -5162,7 +5195,6 @@ function LibraryView({
             });
           }
         }
-        // 3. Artifacts
         if (Array.isArray(m.artifacts)) {
           for (const art of m.artifacts) {
             list.push({
@@ -5202,7 +5234,6 @@ function LibraryView({
     }
 
     return list;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chats, projects, cloudMediaMsgs, userId, refreshKey]);
 
   const filteredLibraryFiles = useMemo(() => {
@@ -5280,9 +5311,7 @@ function LibraryView({
     }
   };
 
-  const handleDelete = async (file: typeof allLibraryFiles[0]) => {
-    if (!confirm(`${t("Delete file from Library?")} ${file.name}`)) return;
-
+  const performDeleteFile = async (file: typeof allLibraryFiles[0]) => {
     if (file.source === "flow" && file.flowFileId) {
       const removed = deleteStoredFlowLibraryFile(file.flowFileId);
       if (removed) {
@@ -5328,6 +5357,21 @@ function LibraryView({
     }
   };
 
+  const handleDelete = (file: typeof allLibraryFiles[0]) => {
+    if (onRequestConfirm) {
+      onRequestConfirm({
+        title: t("Delete file from Library?"),
+        itemLabel: file.name,
+        confirmLabel: t("Delete"),
+        cancelLabel: t("Cancel"),
+        variant: "danger",
+        onConfirm: () => performDeleteFile(file),
+      });
+    } else {
+      void performDeleteFile(file);
+    }
+  };
+
   const handleCreate = async () => {
     const name = newName.trim();
     if (!name) return;
@@ -5346,7 +5390,6 @@ function LibraryView({
       isAuthed={isAuthed}
       onRequireAuth={onRequireAuth}
     >
-      {/* File Content Preview Modal */}
       {previewFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4" onClick={() => setPreviewFile(null)}>
           <div className="w-full max-w-2xl rounded-2xl border border-border bg-background p-5 shadow-2xl space-y-3" onClick={(e) => e.stopPropagation()}>
@@ -5366,35 +5409,61 @@ function LibraryView({
         </div>
       )}
 
-      {/* Top Tab Bar: Files vs Projects */}
-      <div className="mb-5 flex items-center gap-2 border-b border-white/10 pb-3">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setLibTab("files")}
+            className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
+              libTab === "files"
+                ? "bg-zinc-900 text-white dark:bg-[var(--brand)] dark:text-white shadow-sm"
+                : "glass-button text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Paperclip className="h-4 w-4" />
+            <span>{t("All files & attachments")} ({allLibraryFiles.length})</span>
+          </button>
+          <button
+            onClick={() => setLibTab("projects")}
+            className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
+              libTab === "projects"
+                ? "bg-zinc-900 text-white dark:bg-[var(--brand)] dark:text-white shadow-sm"
+                : "glass-button text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Folder className="h-4 w-4" />
+            <span>{t("Projects")} ({projects.length})</span>
+          </button>
+        </div>
+
         <button
-          onClick={() => setLibTab("files")}
-          className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
-            libTab === "files"
-              ? "bg-zinc-900 text-white dark:bg-[var(--brand)] dark:text-white shadow-sm"
-              : "glass-button text-muted-foreground hover:text-foreground"
-          }`}
+          type="button"
+          onClick={() => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.multiple = true;
+            input.onchange = async (e) => {
+              const picked = Array.from((e.target as HTMLInputElement).files || []);
+              for (const f of picked) {
+                try {
+                  await addFileToUnifiedLibrary(f, { projectId: openProjectId || null, taskTitle: t("Library") });
+                  toast.success(`${t("Added to Library:")} ${f.name}`);
+                } catch {
+                  toast.error(`${t("Failed to read file:")} ${f.name}`);
+                }
+              }
+              setRefreshKey((k) => k + 1);
+            };
+            input.click();
+          }}
+          className="inline-flex items-center gap-1.5 rounded-xl bg-zinc-900 dark:bg-[var(--brand)] px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 transition-all shadow-sm cursor-pointer"
         >
-          <Paperclip className="h-4 w-4" />
-          <span>{t("All files & attachments")} ({allLibraryFiles.length})</span>
-        </button>
-        <button
-          onClick={() => setLibTab("projects")}
-          className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
-            libTab === "projects"
-              ? "bg-zinc-900 text-white dark:bg-[var(--brand)] dark:text-white shadow-sm"
-              : "glass-button text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <Folder className="h-4 w-4" />
-          <span>{t("Projects")} ({projects.length})</span>
+          <Upload className="h-3.5 w-3.5" />
+          <span>{t("Upload to Library")}</span>
         </button>
       </div>
 
       {libTab === "files" ? (
         <div>
-          {/* Controls: Search & Category Filter */}
           <div className="mb-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -5428,7 +5497,6 @@ function LibraryView({
             </div>
           </div>
 
-          {/* Files Grid */}
           {filteredLibraryFiles.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/70 p-8 text-center">
               <Paperclip className="mx-auto h-8 w-8 text-muted-foreground/50 mb-2" />
@@ -5445,7 +5513,6 @@ function LibraryView({
                   className="glass-card group flex flex-col justify-between rounded-xl border border-border/80 bg-surface/50 p-3.5 hover:border-brand/40 transition-all shadow-sm"
                 >
                   <div>
-                    {/* Thumbnail or File Type Header */}
                     {file.type === "image" && file.dataUrl ? (
                       <div className="relative mb-2.5 h-32 w-full overflow-hidden rounded-lg bg-black/40 border border-border/60">
                         <img src={file.dataUrl} alt={file.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300" />
@@ -5484,7 +5551,6 @@ function LibraryView({
                     </div>
                   </div>
 
-                  {/* Actions bar */}
                   <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-2.5">
                     {file.source === "flow" ? (
                       <button
@@ -5598,7 +5664,23 @@ function LibraryView({
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
                       <button
-                        onClick={(e) => { e.stopPropagation(); if (confirm(t("Delete this project?"))) void onDeleteProject(p.id); }}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onRequestConfirm) {
+                            onRequestConfirm({
+                              title: t("Delete project"),
+                              itemLabel: p.name,
+                              description: t("Chats inside this project will stay available in Recent."),
+                              confirmLabel: t("Delete"),
+                              cancelLabel: t("Cancel"),
+                              variant: "danger",
+                              onConfirm: () => onDeleteProject(p.id),
+                            });
+                          } else {
+                            void onDeleteProject(p.id);
+                          }
+                        }}
                         className="glass-button p-1.5 rounded-lg text-muted-foreground hover:text-brand cursor-pointer"
                         title={t("Delete")}
                       >
@@ -5828,19 +5910,22 @@ function LibraryView({
   );
 }
 
-/* ---------- Saved ---------- */
 function SavedView({
   isAuthed,
   onRequireAuth,
   chats,
   onOpenChat,
   onUnsave,
+  onOpenLibrary,
+  onOpenLibraryPicker,
 }: {
   isAuthed: boolean;
   onRequireAuth: () => void;
   chats: ChatRow[];
   onOpenChat: (id: string) => void;
   onUnsave: (id: string) => void;
+  onOpenLibrary?: () => void;
+  onOpenLibraryPicker?: () => void;
 }) {
   const t = useT();
   const lang = useLang();
@@ -5861,6 +5946,28 @@ function SavedView({
       isAuthed={isAuthed}
       onRequireAuth={onRequireAuth}
     >
+      <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+        {onOpenLibraryPicker && (
+          <button
+            type="button"
+            onClick={onOpenLibraryPicker}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground hover:border-brand/50 transition-colors cursor-pointer"
+          >
+            <BookOpen className="h-3.5 w-3.5 text-brand" />
+            <span>{t("Use file from Library")}</span>
+          </button>
+        )}
+        {onOpenLibrary && (
+          <button
+            type="button"
+            onClick={onOpenLibrary}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          >
+            <Library className="h-3.5 w-3.5" />
+            <span>{t("Open Library")}</span>
+          </button>
+        )}
+      </div>
       {chats.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border/70 px-4 py-10 text-center">
           <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full border border-border/70 text-muted-foreground">
@@ -5914,7 +6021,6 @@ function DeployVercelModal({
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     } catch {
-      /* ignore */
     }
   };
 
@@ -5936,7 +6042,6 @@ function DeployVercelModal({
           <X className="h-5 w-5" />
         </button>
 
-        {/* Modal Header */}
         <div className="flex items-center gap-3 border-b border-zinc-200 dark:border-white/10 pb-3 shrink-0 pr-8">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-black dark:bg-[var(--brand)] text-white shadow-md">
             <Rocket className="h-5 w-5" />
@@ -5947,7 +6052,6 @@ function DeployVercelModal({
           </div>
         </div>
 
-        {/* Modal Instructions Content (Scrollable) */}
         <div className="mt-3 space-y-4 text-xs leading-relaxed flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
           <div className="space-y-2">
             <div className="font-semibold text-sm text-zinc-900 dark:text-zinc-100">
@@ -5993,7 +6097,6 @@ function DeployVercelModal({
           </div>
         </div>
 
-        {/* Modal Footer */}
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2 sm:gap-3 border-t border-zinc-200 dark:border-white/10 pt-3 shrink-0">
           <button
             onClick={onClose}
@@ -6024,7 +6127,7 @@ export default function App() {
     <div style={{ padding: '2rem', fontFamily: 'sans-serif', background: '#09090b', color: '#f4f4f5', minHeight: '100vh' }}>
       <h1 style={{ color: '#ef4444', fontSize: '2.25rem', fontWeight: 800, margin: 0 }}>IGseek Engine Studio ✦</h1>
       <p style={{ color: '#a1a1aa', marginTop: '0.5rem' }}>Ready-to-deploy web app for Vercel</p>
-      
+
       <div style={{ marginTop: '2rem', padding: '1.5rem', background: '#18181b', borderRadius: '1rem', border: '1px solid #27272a' }}>
         <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#ffffff' }}>🚀 App Studio</h3>
         <p style={{ color: '#71717a', fontSize: '0.875rem', marginTop: '0.5rem' }}>
@@ -6096,7 +6199,6 @@ const INITIAL_ENGINE_MESSAGES: Array<{ id: string; role: "user" | "assistant"; c
   },
 ];
 
-/* ---------- Engine (public, no auth) ---------- */
 function EngineView({
   cloudUid,
   usageUid = "guest",
@@ -6111,6 +6213,8 @@ function EngineView({
   onCreateProject,
   onAssignChat,
   onNavigateToLibrary,
+  onOpenLibraryPicker,
+  onRequestConfirm,
 }: {
   cloudUid?: string | null;
   usageUid?: string;
@@ -6133,6 +6237,8 @@ function EngineView({
   onCreateProject?: (name: string) => Promise<ProjectRow | null>;
   onAssignChat?: (chatId: string, projectId: string | null) => Promise<void>;
   onNavigateToLibrary?: () => void;
+  onOpenLibraryPicker?: (handler: (item: UnifiedLibraryItem & { resolvedDataUrl?: string }) => void) => void;
+  onRequestConfirm?: (cfg: ConfirmDialogConfig) => void;
 }) {
   const t = useT();
   const lang = useLang();
@@ -6165,7 +6271,6 @@ function EngineView({
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [editingEngineMsgId, setEditingEngineMsgId] = useState<string | null>(null);
 
-  // Project selector state
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -6210,7 +6315,6 @@ function EngineView({
   };
 
   const handleStartNewChat = () => {
-    // Не прерываем текущую генерацию — она продолжит выполняться в фоне и сохранится в проекте!
     setHasStarted(false);
     setPrompt("");
     setFiles(INITIAL_ENGINE_FILES);
@@ -6222,7 +6326,6 @@ function EngineView({
     onActiveChatChange?.(null);
   };
 
-  // Sync selectedProjectId when activeChatId changes
   useEffect(() => {
     if (!activeChatId) {
       setSelectedProjectId(null);
@@ -6283,10 +6386,8 @@ function EngineView({
     }
   };
 
-  // Chat messages history inside Engine Studio
   const [chatMessages, setChatMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string; filesUpdated?: string[]; limitCooldown?: LimitCooldownPayload }>>(INITIAL_ENGINE_MESSAGES);
 
-  // Project file system store
   const [files, setFiles] = useState<Record<string, string>>(INITIAL_ENGINE_FILES);
 
   const scheduleCloudEngineSave = (
@@ -6351,7 +6452,6 @@ function EngineView({
     toast.success(t("Message text updated"));
   };
 
-  // Load project when activeChatId or cloudUid changes (local cache + Firebase Firestore sync)
   useEffect(() => {
     if (!activeChatId) {
       setHasStarted(false);
@@ -6361,7 +6461,6 @@ function EngineView({
       setIsGenerating(false);
       return;
     }
-    // Если этот проект сейчас генерируется в фоне — восстанавливаем состояние генерации!
     const existingEngineJob = activeEngineJobsRef.current.get(activeChatId);
     if (existingEngineJob) {
       setIsGenerating(true);
@@ -6494,7 +6593,7 @@ function EngineView({
       toast.error(t("Cannot delete the only project file!"));
       return;
     }
-    if (confirm(`${t("Delete file")} ${fileName}?`)) {
+    const doRemoveFile = () => {
       const next = { ...files };
       delete next[fileName];
       setFiles(next);
@@ -6513,6 +6612,18 @@ function EngineView({
         } catch {}
         scheduleCloudEngineSave(activeChatId, next, chatMessages, nextActive, true);
       }
+    };
+    if (onRequestConfirm) {
+      onRequestConfirm({
+        title: t("Delete file"),
+        itemLabel: fileName,
+        confirmLabel: t("Delete"),
+        cancelLabel: t("Cancel"),
+        variant: "danger",
+        onConfirm: doRemoveFile,
+      });
+    } else {
+      doRemoveFile();
     }
   };
 
@@ -6585,9 +6696,20 @@ or
 \`\`\`
 Engine Studio automatically parses these blocks and writes files directly into the project workspace.`;
 
+      const [{ data: sessionData }, unifiedLibItems] = await Promise.all([
+        supabase.auth.getSession(),
+        fetchUnifiedLibraryItems({ userId: cloudUid || usageUid, chats, projects }).catch(() =>
+          collectLocalUnifiedLibrary({ userId: cloudUid || usageUid, chats, projects }),
+        ),
+      ]);
+      const accessToken = sessionData.session?.access_token;
+
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+        },
         body: JSON.stringify({
           messages: [
             { role: "system", content: systemInstruction },
@@ -6597,6 +6719,7 @@ Engine Studio automatically parses these blocks and writes files directly into t
           model,
           agent,
           workspace: "engine",
+          libraryFiles: buildChatLibraryPayload(unifiedLibItems),
         }),
         signal: controller.signal,
       });
@@ -6626,7 +6749,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
           }
         }
 
-        // Parse files from response
         const fileRegex = /```file:(.+?)\n([\s\S]*?)```/g;
         const updatedFilesList: string[] = [];
         const newFilesMap: Record<string, string> = {};
@@ -6641,7 +6763,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
           }
         }
 
-        // Also check if simple React component was output
         if (!updatedFilesList.length) {
           const tsxMatch = /```(?:tsx|jsx|html)?\s*([\s\S]*?)```/.exec(fullText);
           if (tsxMatch && tsxMatch[1]) {
@@ -6652,7 +6773,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
 
         const nextFiles = { ...files, ...newFilesMap };
 
-        // Clean explanatory text for chat display (removing the file blocks)
         let cleanText = fullText.replace(/```file:[\s\S]*?```/g, "").trim();
         if (!cleanText) {
           cleanText = "✅ " + t("Code generated successfully! Updated files available in Files tab.");
@@ -6871,7 +6991,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto px-2">
-      {/* Deploy & LongText Modals */}
       <AnimatePresence>
         {deployModalOpen && (
           <DeployVercelModal
@@ -6924,10 +7043,8 @@ Engine Studio automatically parses these blocks and writes files directly into t
         );
       })()}
 
-      {/* ================= VIEW 1: WELCOMING START SCREEN (BEFORE CREATION STARTS) ================= */}
       {!hasStarted ? (
         <div className="space-y-6 max-w-4xl mx-auto px-2 pt-4 pb-8 max-h-[calc(100vh-100px)] md:max-h-[calc(100vh-110px)] overflow-y-auto">
-          {/* Header */}
           <div className="flex flex-col items-center text-center max-w-xl mx-auto space-y-2">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-black/10 dark:border-white/10 bg-zinc-100 dark:bg-white/5 px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-800 dark:text-zinc-200">
               <Sparkles className="h-3.5 w-3.5 text-black dark:text-[var(--brand)]" />
@@ -6944,7 +7061,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
             </div>
           </div>
 
-          {/* Centered Welcoming Composer Card */}
           <div className="mx-auto w-full max-w-2xl">
             <form
               onSubmit={(e) => {
@@ -6985,9 +7101,19 @@ Engine Studio automatically parses these blocks and writes files directly into t
                     onClick={() => {
                       const input = document.createElement("input");
                       input.type = "file";
-                      input.onchange = (e) => {
+                      input.onchange = async (e) => {
                         const file = (e.target as HTMLInputElement).files?.[0];
-                        if (file) setPrompt((prev) => `${prev}\n[${t("File")}: ${file.name}]`);
+                        if (!file) return;
+                        try {
+                          const added = await addFileToUnifiedLibrary(file, { projectId: selectedProjectId, taskTitle: "Engine" });
+                          if (added.content) {
+                            setFiles((prev) => ({ ...prev, [added.name]: added.content! }));
+                          }
+                          setPrompt((prev) => `${prev ? `${prev}\n` : ""}[${t("File in Library")}: ${file.name}]${added.content ? `\n\`\`\`\n${added.content.slice(0, 6000)}\n\`\`\`` : ""}`);
+                          toast.success(`${t("Added to Library:")} ${file.name}`);
+                        } catch {
+                          setPrompt((prev) => `${prev}\n[${t("File")}: ${file.name}]`);
+                        }
                       };
                       input.click();
                     }}
@@ -6996,6 +7122,30 @@ Engine Studio automatically parses these blocks and writes files directly into t
                   >
                     <Paperclip className="h-4 w-4" />
                   </button>
+
+                  {onOpenLibraryPicker && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenLibraryPicker((item) => {
+                          if (item.content) {
+                            setFiles((prev) => ({ ...prev, [item.name]: item.content! }));
+                          }
+                          setPrompt((prev) =>
+                            `${prev ? `${prev}\n` : ""}[${t("File from Library")}: ${item.name}]${
+                              item.content ? `\n\`\`\`\n${item.content.slice(0, 6000)}\n\`\`\`` : ""
+                            }`,
+                          );
+                          toast.success(`${t("Imported from Library:")} ${item.name}`);
+                        })
+                      }
+                      className="flex h-9 px-3 items-center gap-1.5 rounded-full border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-xs font-medium text-zinc-700 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white transition-colors cursor-pointer"
+                      title={t("Select from Library")}
+                    >
+                      <BookOpen className="h-3.5 w-3.5 text-black dark:text-[var(--brand)]" />
+                      <span className="hidden sm:inline">{t("Library")}</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"
@@ -7091,7 +7241,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
               </div>
             </form>
 
-            {/* Prompt Chips */}
             <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-2.5">
               {[
                 {
@@ -7136,11 +7285,8 @@ Engine Studio automatically parses these blocks and writes files directly into t
           </div>
         </div>
       ) : (
-        /* ================= VIEW 2: ACTIVE STUDIO WORKSPACE (SHOWN AFTER CREATION STARTS) ================= */
         <div className="flex flex-col h-[calc(100vh-100px)] md:h-[calc(100vh-110px)] max-w-5xl mx-auto w-full space-y-3 overflow-hidden">
-          {/* Top Navigation Bar with 3 Tabs + Deploy Button */}
           <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 dark:border-white/10 pb-3">
-            {/* Left New Chat Button & Project Selector */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -7154,7 +7300,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
               {renderProjectSelector()}
             </div>
 
-            {/* Center 3 Top Tabs: Chat / Preview / Files */}
             <div className="flex items-center rounded-2xl border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 p-1 text-xs font-medium">
               <button
                 onClick={() => setEngineTab("chat")}
@@ -7193,7 +7338,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
               </button>
             </div>
 
-            {/* Right Deploy Button */}
             <button
               onClick={() => setDeployModalOpen(true)}
               className="flex items-center gap-1.5 rounded-2xl bg-black dark:bg-[var(--brand)] hover:bg-zinc-800 dark:hover:brightness-110 px-4 py-2 text-xs font-bold text-white transition-all shadow-md shadow-black/10 dark:shadow-[var(--brand-shadow)] active:scale-95 cursor-pointer"
@@ -7203,10 +7347,8 @@ Engine Studio automatically parses these blocks and writes files directly into t
             </button>
           </div>
 
-          {/* ================= TAB 1: CHAT ================= */}
           {engineTab === "chat" && (
             <div className="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
-              {/* Chat Messages (ONLY THIS AREA SCROLLS) */}
               <div className="flex-1 min-h-0 overflow-y-auto scroll-smooth flex flex-col gap-3 p-2 rounded-2xl border border-zinc-200/80 dark:border-white/10 bg-zinc-50/50 dark:bg-zinc-900/40 shadow-inner">
                 {chatMessages.map((msg) => (
                   <div
@@ -7241,7 +7383,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
                         </div>
                       )}
 
-                      {/* Summary of files updated */}
                       {msg.filesUpdated && msg.filesUpdated.length > 0 && (
                         <div className="mt-3 pt-2.5 border-t border-zinc-200 dark:border-white/10 flex flex-col gap-2">
                           <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
@@ -7286,7 +7427,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
                 <div ref={chatEndRef} />
               </div>
 
-              {/* Chat Input Bar (FIXED AT BOTTOM) */}
               {isLongTextOverLimit(prompt) && (
                 <div className="shrink-0 flex justify-end">
                   <LongTextButton
@@ -7302,6 +7442,28 @@ Engine Studio automatically parses these blocks and writes files directly into t
                 }}
                 className="shrink-0 relative flex items-end gap-2 rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-2 shadow-lg backdrop-blur-xl"
               >
+                {onOpenLibraryPicker && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenLibraryPicker((item) => {
+                        if (item.content) {
+                          setFiles((prev) => ({ ...prev, [item.name]: item.content! }));
+                        }
+                        setPrompt((prev) =>
+                          `${prev ? `${prev}\n` : ""}[${t("File from Library")}: ${item.name}]${
+                            item.content ? `\n\`\`\`\n${item.content.slice(0, 6000)}\n\`\`\`` : ""
+                          }`,
+                        );
+                        toast.success(`${t("Imported from Library:")} ${item.name}`);
+                      })
+                    }
+                    title={t("Select from Library")}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white transition-colors cursor-pointer"
+                  >
+                    <BookOpen className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 <textarea
                   ref={engineActiveComposerRef}
                   value={prompt}
@@ -7350,7 +7512,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
             </div>
           )}
 
-          {/* ================= TAB 2: PREVIEW ================= */}
           {engineTab === "preview" && (
             <div className="flex-1 min-h-0 flex flex-col rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-zinc-950 shadow-xl overflow-hidden">
               <div className="shrink-0 flex flex-wrap items-center justify-between border-b border-zinc-200 dark:border-white/10 bg-zinc-50 dark:bg-zinc-900/80 px-4 py-2.5 gap-2">
@@ -7393,7 +7554,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
                 </div>
               </div>
 
-              {/* Scrollable preview body container */}
               <div className="flex-1 min-h-0 flex items-start justify-center bg-zinc-900 p-2 md:p-4 overflow-y-auto">
                 <div
                   className={`transition-all duration-300 ${
@@ -7412,7 +7572,6 @@ Engine Studio automatically parses these blocks and writes files directly into t
             </div>
           )}
 
-          {/* ================= TAB 3: FILES ================= */}
           {engineTab === "files" && (
             <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-4 rounded-2xl border border-zinc-200 dark:border-white/10 bg-white dark:bg-zinc-950 shadow-xl overflow-y-auto md:overflow-hidden">
               <div className="md:col-span-1 border-b md:border-b-0 md:border-r border-zinc-200 dark:border-white/10 bg-zinc-50 dark:bg-zinc-900/50 p-3 flex flex-col gap-2 shrink-0 md:h-full md:overflow-hidden">
@@ -7539,7 +7698,7 @@ Engine Studio automatically parses these blocks and writes files directly into t
   );
 }
 
-function WaveView({ onGoToChat }: { onGoToChat: () => void }) {
+function WaveView({ onGoToChat, onOpenLibrary }: { onGoToChat: () => void; onOpenLibrary?: () => void }) {
   const t = useT();
   const capabilities = [
     {
@@ -7591,7 +7750,6 @@ function WaveView({ onGoToChat }: { onGoToChat: () => void }) {
         </p>
       </div>
 
-      {/* Decorative upcoming waveform preview card */}
       <div className="rounded-2xl border border-border bg-surface p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -7623,7 +7781,6 @@ function WaveView({ onGoToChat }: { onGoToChat: () => void }) {
         </div>
       </div>
 
-      {/* Capabilities grid */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {capabilities.map((cap) => (
           <div
@@ -7643,24 +7800,34 @@ function WaveView({ onGoToChat }: { onGoToChat: () => void }) {
         ))}
       </div>
 
-      {/* Status notice + Back to chat */}
       <div className="flex flex-col gap-4 rounded-xl border border-dashed border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-xs leading-relaxed text-muted-foreground">
           {t("Status: SOON. This feature is planned for one of the upcoming IGseek updates and is not yet implemented.")}
         </div>
-        <button
-          onClick={onGoToChat}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-foreground px-4 py-2 text-xs font-semibold text-background transition-opacity hover:opacity-90"
-        >
-          <MessageSquare className="h-3.5 w-3.5" />
-          <span>{t("Back to Chat")}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {onOpenLibrary && (
+            <button
+              onClick={onOpenLibrary}
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-border bg-surface-elevated px-4 py-2 text-xs font-semibold text-foreground transition-colors hover:border-brand/50 cursor-pointer"
+            >
+              <BookOpen className="h-3.5 w-3.5 text-brand" />
+              <span>{t("Library")}</span>
+            </button>
+          )}
+          <button
+            onClick={onGoToChat}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-foreground px-4 py-2 text-xs font-semibold text-background transition-opacity hover:opacity-90 cursor-pointer"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            <span>{t("Back to Chat")}</span>
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-function DocsView() {
+function DocsView({ onOpenLibrary }: { onOpenLibrary?: () => void }) {
   const t = useT();
   const inWebView = isEmbeddedWebView();
   const [activeDoc, setActiveDoc] = useState<{
@@ -7700,6 +7867,16 @@ function DocsView() {
         <p className="mt-2 max-w-xl text-[14px] leading-relaxed text-muted-foreground">
           {t("Legal documents and support contacts.")}
         </p>
+        {onOpenLibrary && (
+          <button
+            type="button"
+            onClick={onOpenLibrary}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-border bg-surface px-3.5 py-2 text-xs font-semibold text-foreground hover:border-brand/50 transition-colors cursor-pointer"
+          >
+            <BookOpen className="h-3.5 w-3.5 text-brand" />
+            <span>{t("Open Library")}</span>
+          </button>
+        )}
       </div>
 
       <div className="mt-8 grid grid-cols-1 gap-3">
@@ -7776,9 +7953,6 @@ function DocsView() {
   );
 }
 
-
-
-
 function GmailAuthModal({
   onClose,
   onConnected,
@@ -7786,7 +7960,14 @@ function GmailAuthModal({
 }: {
   onClose: () => void;
   onConnected?: () => void;
-  pendingEmail?: { id?: string; action: string; to?: string; subject?: string; body?: string } | null;
+  pendingEmail?: {
+    id?: string;
+    action: string;
+    to?: string;
+    subject?: string;
+    body?: string;
+    attachments?: Array<{ filename: string; mimeType?: string; dataUrl?: string }>;
+  } | null;
 }) {
   const t = useT();
   const [connecting, setConnecting] = useState(false);
@@ -7805,10 +7986,16 @@ function GmailAuthModal({
               to: pendingEmail.to,
               subject: pendingEmail.subject || t("No Subject"),
               body: pendingEmail.body,
+              attachments: pendingEmail.attachments,
             });
-            toast.success(`${t("Email sent successfully to")} ${pendingEmail.to}!`);
+            toast.success(
+              pendingEmail.attachments?.length
+                ? `${t("Email sent successfully to")} ${pendingEmail.to}! (${t("Attached files:")} ${pendingEmail.attachments.length})`
+                : `${t("Email sent successfully to")} ${pendingEmail.to}!`,
+            );
           } catch (e: any) {
             console.error("Failed to send pending email:", e);
+            toast.error(e?.message || t("Failed to send pending email"));
           }
         }
         onConnected?.();
@@ -7866,7 +8053,7 @@ function GmailAuthModal({
         </p>
 
         {pendingEmail && (
-          <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/5 dark:bg-red-500/10 p-3 text-xs">
+          <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/5 dark:bg-red-500/10 p-3 text-xs space-y-0.5">
             <div className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5 mb-1">
               <span>📧</span> <span>{t("Prepared email:")}</span>
             </div>
@@ -7878,6 +8065,12 @@ function GmailAuthModal({
             {pendingEmail.subject && (
               <div className="text-zinc-600 dark:text-zinc-400 truncate">
                 <span className="font-medium text-zinc-800 dark:text-zinc-200">{t("Subject:")}</span> {pendingEmail.subject}
+              </div>
+            )}
+            {pendingEmail.attachments && pendingEmail.attachments.length > 0 && (
+              <div className="text-zinc-600 dark:text-zinc-400 truncate">
+                <span className="font-medium text-zinc-800 dark:text-zinc-200">{t("Attachments:")}</span>{" "}
+                {pendingEmail.attachments.map((a) => a.filename).join(", ")}
               </div>
             )}
           </div>
@@ -8003,7 +8196,6 @@ function AppleIcon({ className = "" }: { className?: string }) {
   );
 }
 
-/* ---------- Mandatory first-time registration accent picker modal (OAuth signups) ---------- */
 function AccentOnboardingModal({
   theme,
   onConfirm,
@@ -8101,7 +8293,6 @@ function AccentOnboardingModal({
   );
 }
 
-/* ---------- Profile modal (subscription management & settings) ---------- */
 function ProfileModal({
   user,
   isGuest = false,
@@ -8113,6 +8304,7 @@ function ProfileModal({
   onModelChange,
   onAgentChange,
   onSaveCloudPrefs,
+  onRequestConfirm,
 }: {
   user: NonNullable<User>;
   isGuest?: boolean;
@@ -8124,6 +8316,7 @@ function ProfileModal({
   onModelChange?: (m: ModelId) => void;
   onAgentChange?: (a: AgentId) => void;
   onSaveCloudPrefs?: (patch: Record<string, any>) => void;
+  onRequestConfirm?: (cfg: ConfirmDialogConfig) => void;
 }) {
   const t = useT();
   const lang = useLang();
@@ -8217,7 +8410,6 @@ function ProfileModal({
           <X className="h-4 w-4" />
         </button>
 
-        {/* Modal Header & User Info */}
         <div className="flex items-center gap-3 border-b border-border/70 pb-4 shrink-0 pr-8">
           <div className="relative h-10 w-10 shrink-0 rounded-full bg-brand flex items-center justify-center text-xs font-bold text-white shadow-md">
             {initials}
@@ -8228,7 +8420,6 @@ function ProfileModal({
           </div>
         </div>
 
-        {/* Tabs Switcher Row */}
         <div className="flex items-center justify-center border-b border-border/70 py-3 shrink-0">
           <div className="flex w-full max-w-sm rounded-xl border border-border bg-surface-elevated/60 p-0.5 text-xs">
             <button
@@ -8258,11 +8449,9 @@ function ProfileModal({
           </div>
         </div>
 
-        {/* Scrollable Content Area */}
         <div className="mt-4 flex-1 overflow-y-auto space-y-5 pr-1 text-xs">
           {activeTab === "settings" ? (
             <>
-              {/* Reset button top-right in settings */}
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sm text-foreground flex items-center gap-2">
                   <Sparkles className="h-4 w-4 text-brand" />
@@ -8276,7 +8465,6 @@ function ProfileModal({
                 </button>
               </div>
 
-              {/* 1. Model Selection */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   <Sparkles className="h-3.5 w-3.5 text-brand" />
@@ -8312,7 +8500,6 @@ function ProfileModal({
                 </div>
               </div>
 
-              {/* 2. Character / Style */}
               <div className="space-y-1.5">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   ✍️ {t("Personality / communication style")}
@@ -8329,7 +8516,6 @@ function ProfileModal({
                 />
               </div>
 
-              {/* 3. Creativity */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   🌡️ {t("Creativity")}
@@ -8358,7 +8544,6 @@ function ProfileModal({
                 </div>
               </div>
 
-              {/* 4. Answer Length */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   📏 {t("Response length")}
@@ -8388,7 +8573,6 @@ function ProfileModal({
                 </div>
               </div>
 
-              {/* 5. Mode / Agent */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   🤖 {t("Mode / Agent")}
@@ -8420,7 +8604,6 @@ function ProfileModal({
             </>
           ) : activeTab === "personalization" ? (
             <div className="rounded-2xl border border-border/70 bg-surface-elevated/40 p-4 sm:p-5 space-y-5 shadow-sm">
-              {/* Personalization Tab Header */}
               <div className="flex items-center justify-between pb-1 border-b border-border/50">
                 <span className="font-semibold text-sm text-foreground flex items-center gap-2">
                   <Sparkles className="h-4 w-4 text-brand" />
@@ -8434,7 +8617,6 @@ function ProfileModal({
                 </button>
               </div>
 
-              {/* Theme toggle */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   🌓 {t("Interface theme")}
@@ -8465,7 +8647,6 @@ function ProfileModal({
                 </div>
               </div>
 
-              {/* Accent Color Section */}
               <div className="space-y-2">
                 <label className="font-medium text-foreground flex items-center gap-1.5">
                   🎨 {t("Accent color")}
@@ -8500,8 +8681,6 @@ function ProfileModal({
             </div>
           ) : (
             <>
-              {/* Account Tab */}
-              {/* Prompt Limits Breakdown */}
               <div className="glass-card rounded-xl border border-border/80 bg-surface-elevated/40 p-4 space-y-3">
                 <div className="flex items-center justify-between text-sm font-medium text-foreground">
                   <span className="flex items-center gap-2">
@@ -8576,8 +8755,9 @@ function ProfileModal({
               <div className="pt-3 border-t border-border/60 flex items-center justify-between">
                 <span className="text-[11px] text-muted-foreground">{t("Clear all cached data and restart")}</span>
                 <button
-                  onClick={async () => {
-                    if (confirm(t("Reset all data and start fresh? This will clear local storage and sign out."))) {
+                  type="button"
+                  onClick={() => {
+                    const doReset = async () => {
                       try {
                         await supabase.auth.signOut();
                       } catch {}
@@ -8593,6 +8773,18 @@ function ProfileModal({
                         window.sessionStorage.clear();
                       } catch {}
                       window.location.href = "/";
+                    };
+                    if (onRequestConfirm) {
+                      onRequestConfirm({
+                        title: t("Reset app data"),
+                        description: t("Reset all data and start fresh? This will clear local storage and sign out."),
+                        confirmLabel: t("Reset"),
+                        cancelLabel: t("Cancel"),
+                        variant: "warning",
+                        onConfirm: doReset,
+                      });
+                    } else {
+                      void doReset();
                     }
                   }}
                   className="glass-button inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 transition-colors cursor-pointer"
@@ -8616,7 +8808,6 @@ function ProfileModal({
           )}
         </div>
 
-        {/* Modal Footer */}
         <div className="mt-5 flex items-center justify-end gap-3 border-t border-border/70 pt-4 shrink-0">
           <button
             onClick={onClose}
@@ -8636,8 +8827,6 @@ function ProfileModal({
   );
 }
 
-
-/* ---------- Memory HUD Modal (long-term memory notebook) ---------- */
 type MemoryAttachment = {
   name: string;
   type: string;
@@ -8677,20 +8866,38 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
     maxViewportFraction: 0.35,
   });
 
-  const authHeader = async () => {
+  const getSessionInfo = async () => {
     const { data } = await supabase.auth.getSession();
-    return data.session?.access_token ? { authorization: `Bearer ${data.session.access_token}` } : {};
+    const token = data.session?.access_token || "";
+    const uid = data.session?.user?.id || "";
+    const isValid = token.split(".").length === 3 || token.startsWith("local_");
+    return { token, uid, isValid };
   };
 
   const load = async () => {
     setLoading(true);
     try {
-      const h = await authHeader();
-      const res = await fetch("/api/memory", { headers: h as HeadersInit });
+      const { token, isValid } = await getSessionInfo();
+      if (!isValid) {
+        setItems([]);
+        return;
+      }
+      const res = await fetch("/api/memory", {
+        headers: { authorization: `Bearer ${token}` },
+      });
       if (res.ok) {
         const j = (await res.json()) as { items: Memory[] };
-        setItems(j.items);
+        setItems(Array.isArray(j.items) ? j.items : []);
+      } else {
+        const errText = await res.text().catch(() => "");
+        let msg = errText;
+        try {
+          msg = JSON.parse(errText)?.error || msg;
+        } catch {}
+        toast.error(msg || `${t("Failed to load memory")} (HTTP ${res.status})`);
       }
+    } catch (e: any) {
+      toast.error(e?.message || t("Failed to load memory"));
     } finally {
       setLoading(false);
     }
@@ -8701,45 +8908,73 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
     const onUpdated = () => load();
     window.addEventListener("igseek:memory-updated", onUpdated);
     return () => window.removeEventListener("igseek:memory-updated", onUpdated);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const compressImageDataUrl = (rawUrl: string): Promise<string> =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxSide = 1200;
+        const scale = Math.min(1, maxSide / Math.max(img.width || 1, img.height || 1));
+        const w = Math.max(1, Math.round((img.width || 1) * scale));
+        const h = Math.max(1, Math.round((img.height || 1) * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(rawUrl);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", 0.78));
+      };
+      img.onerror = () => resolve(rawUrl);
+      img.src = rawUrl;
+    });
 
   const handleMemFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
     const isTxt =
       file.type.startsWith("text/") ||
-      file.name.endsWith(".txt") ||
-      file.name.endsWith(".json") ||
-      file.name.endsWith(".md") ||
-      file.name.endsWith(".js") ||
-      file.name.endsWith(".ts");
+      /\.(txt|md|json|csv|js|ts|tsx|jsx|py|html|css|xml|yaml|yml|log|sql|sh|env)$/i.test(file.name);
+
+    const finalizeAttachment = async (rawDataUrl?: string, textContent?: string) => {
+      let safeDataUrl = rawDataUrl;
+      if (safeDataUrl && file.type.startsWith("image/") && safeDataUrl.length > 650_000) {
+        safeDataUrl = await compressImageDataUrl(safeDataUrl);
+      }
+      if (safeDataUrl && safeDataUrl.length > 750_000) {
+        if (textContent) {
+          safeDataUrl = undefined;
+        } else {
+          toast.error("Файл слишком большой (лимит ~550 КБ для вложений в Memory HUD).");
+          if (memFileInputRef.current) memFileInputRef.current.value = "";
+          return;
+        }
+      }
+      setDraftAttachment({
+        name: file.name,
+        type: file.type || (isTxt ? "text/plain" : "application/octet-stream"),
+        size: file.size,
+        ...(safeDataUrl ? { dataUrl: safeDataUrl } : {}),
+        ...(textContent ? { textContent } : {}),
+      });
+    };
 
     if (isTxt) {
+      const reader = new FileReader();
       reader.onload = (ev) => {
-        const textContent = (ev.target?.result as string)?.slice(0, 4000);
+        const textContent = String(ev.target?.result || "").slice(0, 24000);
         const r2 = new FileReader();
         r2.onload = (ev2) => {
-          setDraftAttachment({
-            name: file.name,
-            type: file.type || "text/plain",
-            size: file.size,
-            dataUrl: ev2.target?.result as string,
-            textContent,
-          });
+          void finalizeAttachment(ev2.target?.result as string, textContent);
         };
         r2.readAsDataURL(file);
       };
       reader.readAsText(file);
     } else {
+      const reader = new FileReader();
       reader.onload = (ev) => {
-        setDraftAttachment({
-          name: file.name,
-          type: file.type || "application/octet-stream",
-          size: file.size,
-          dataUrl: ev.target?.result as string,
-        });
+        void finalizeAttachment(ev.target?.result as string);
       };
       reader.readAsDataURL(file);
     }
@@ -8748,58 +8983,109 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
   const addMemory = async () => {
     const text = draft.trim();
     if (!text && !draftAttachment) return;
+    const finalContent = text || `${t("Memory attachment:")} ${draftAttachment?.name}`;
     setSaving(true);
     try {
-      const h = await authHeader();
+      const { token, isValid } = await getSessionInfo();
+      if (!isValid) {
+        toast.error(t("Please sign in to save memories"));
+        return;
+      }
+
       const res = await fetch("/api/memory", {
         method: "POST",
-        headers: { "content-type": "application/json", ...(h as Record<string, string>) },
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
-          content: text || `${t("Memory attachment:")} ${draftAttachment?.name}`,
+          content: finalContent,
           attachment: draftAttachment,
         }),
       });
       if (res.ok) {
         const j = (await res.json()) as { items: Memory[] };
-        setItems(j.items);
+        setItems(Array.isArray(j.items) ? j.items : []);
         setDraft("");
         setDraftAttachment(null);
         if (memFileInputRef.current) memFileInputRef.current.value = "";
+        toast.success(t("Saved to memory"));
+      } else {
+        const errText = await res.text().catch(() => "");
+        let msg = errText;
+        try {
+          msg = JSON.parse(errText)?.error || msg;
+        } catch {}
+        toast.error(msg || `${t("Failed to save memory")} (HTTP ${res.status})`);
       }
+    } catch (e: any) {
+      toast.error(e?.message || t("Failed to save memory"));
     } finally {
       setSaving(false);
     }
   };
 
   const saveEdit = async () => {
-    if (!editing) return;
+    if (!editing || !editing.content.trim()) return;
     setSaving(true);
     try {
-      const h = await authHeader();
+      const { token, isValid } = await getSessionInfo();
+      if (!isValid) return;
       const res = await fetch("/api/memory", {
         method: "POST",
-        headers: { "content-type": "application/json", ...(h as Record<string, string>) },
-        body: JSON.stringify({ id: editing.id, content: editing.content }),
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ id: editing.id, content: editing.content.trim() }),
       });
       if (res.ok) {
         const j = (await res.json()) as { items: Memory[] };
-        setItems(j.items);
+        setItems(Array.isArray(j.items) ? j.items : []);
         setEditing(null);
+      } else {
+        const errText = await res.text().catch(() => "");
+        let msg = errText;
+        try {
+          msg = JSON.parse(errText)?.error || msg;
+        } catch {}
+        toast.error(msg || `${t("Failed to update memory")} (HTTP ${res.status})`);
       }
+    } catch (e: any) {
+      toast.error(e?.message || t("Failed to update memory"));
     } finally {
       setSaving(false);
     }
   };
 
   const remove = async (id: string) => {
-    const h = await authHeader();
+    const prevItems = items;
     setItems((prev) => prev.filter((m) => m.id !== id));
     if (selectedId === id) setSelectedId(null);
-    await fetch("/api/memory", {
-      method: "DELETE",
-      headers: { "content-type": "application/json", ...(h as Record<string, string>) },
-      body: JSON.stringify({ id }),
-    });
+    try {
+      const { token, isValid } = await getSessionInfo();
+      if (!isValid) return;
+      const res = await fetch("/api/memory", {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        setItems(prevItems);
+        const errText = await res.text().catch(() => "");
+        let msg = errText;
+        try {
+          msg = JSON.parse(errText)?.error || msg;
+        } catch {}
+        toast.error(msg || `${t("Failed to delete memory")} (HTTP ${res.status})`);
+      }
+    } catch (e: any) {
+      setItems(prevItems);
+      toast.error(e?.message || t("Failed to delete memory"));
+    }
   };
 
   const downloadMemAttachment = (att: MemoryAttachment) => {
@@ -8842,7 +9128,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
         transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* HUD grid backdrop */}
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.05]"
           style={{
@@ -8854,7 +9139,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
         <div className="pointer-events-none absolute -top-24 -right-16 h-64 w-64 rounded-full bg-brand/15 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-24 -left-16 h-72 w-72 rounded-full bg-brand/10 blur-3xl" />
 
-        {/* LEFT PANEL: list & creation (visible on mobile if !selectedId) */}
         <div
           className={`relative z-10 flex w-full md:w-[340px] lg:w-[360px] md:shrink-0 flex-col border-r border-white/10 bg-background/60 backdrop-blur-md ${
             selectedId ? "hidden md:flex" : "flex"
@@ -8951,7 +9235,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
             )}
           </div>
 
-          {/* Draft attachment preview pill */}
           {draftAttachment && (
             <div className="px-3 pt-2">
               <div className="flex items-center justify-between rounded-lg border border-brand/40 bg-brand/10 px-2.5 py-1.5 text-xs text-brand">
@@ -8973,7 +9256,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
             </div>
           )}
 
-          {/* Creation bar with paperclip */}
           <div className="border-t border-white/10 p-3">
             <input
               ref={memFileInputRef}
@@ -8995,6 +9277,14 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onInput={syncMemDraftHeight}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    if (!saving && (draft.trim() || draftAttachment)) {
+                      void addMemory();
+                    }
+                  }
+                }}
                 rows={1}
                 placeholder={t("Add a memory or text…")}
                 className="glass-card flex-1 min-h-[36px] min-w-0 resize-none overflow-hidden rounded-lg border border-white/10 bg-surface-elevated/60 px-3 py-2 text-xs leading-5 placeholder:text-muted-foreground focus:outline-none focus:border-brand/50"
@@ -9011,7 +9301,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
           </div>
         </div>
 
-        {/* RIGHT PANEL: details or summary (visible on mobile if selectedId or desktop) */}
         <div
           className={`relative z-10 flex-1 flex-col ${
             selectedId ? "flex" : "hidden md:flex"
@@ -9088,7 +9377,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                     </p>
                   )}
 
-                  {/* Attachment in detail view */}
                   {selected.attachment && (
                     <div className="mt-4 rounded-xl border border-brand/30 bg-brand/5 p-4">
                       <div className="flex items-center justify-between gap-2">
@@ -9111,7 +9399,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                         )}
                       </div>
 
-                      {/* Image preview */}
                       {selected.attachment.dataUrl?.startsWith("data:image/") && (
                         <div className="mt-3 max-h-56 overflow-hidden rounded-lg border border-border/60">
                           <img
@@ -9122,7 +9409,6 @@ function MemoryModal({ onClose, lang: _lang }: { onClose: () => void; lang: Lang
                         </div>
                       )}
 
-                      {/* Text content preview */}
                       {selected.attachment.textContent && (
                         <div className="mt-3 rounded-lg border border-white/10 bg-black/40 p-3 text-[11px] font-mono leading-relaxed text-muted-foreground max-h-40 overflow-y-auto whitespace-pre-wrap">
                           {selected.attachment.textContent}

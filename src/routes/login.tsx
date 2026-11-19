@@ -62,7 +62,6 @@ function LoginPage() {
 
   return (
     <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-background px-4 py-12 text-foreground">
-      {/* Top right language + theme controls */}
       <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
         <div className="relative">
           <button
@@ -109,7 +108,6 @@ function LoginPage() {
         </button>
       </div>
 
-      {/* subtle grid pattern */}
       <div
         className="pointer-events-none absolute inset-0 opacity-[0.04]"
         style={{

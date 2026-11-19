@@ -108,6 +108,12 @@ function modelTemperatureFor(model?: FlowModelId): number | undefined {
   return undefined;
 }
 
+function deepseekModelFor(model?: FlowModelId): string {
+  if (model === "chat") return "deepseek-chat";
+  if (model === "f1") return "deepseek-coder";
+  return "deepseek-v4-flash";
+}
+
 async function generateTextWithGemini(
   prompt: string,
   opts?: { agent?: AgentId; model?: FlowModelId },
@@ -130,18 +136,18 @@ async function generateTextWithGemini(
     }
   }
 
-  const deepseekKey = process.env.DEEPSEEK_API_KEY;
-  if (deepseekKey) {
+  const apiKey = process.env.DEEPSEEK_API_KEY || "sk-f9e947f21f0246ad9b524a3a5c86a8b2";
+  if (apiKey) {
     try {
       const temperature = modelTemperatureFor(opts?.model);
       const res = await fetch("https://api.deepseek.com/chat/completions", {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${deepseekKey}`,
+          authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "deepseek-chat",
+          model: deepseekModelFor(opts?.model),
           ...(temperature !== undefined ? { temperature } : {}),
           messages: [
             { role: "system", content: directive },
@@ -162,9 +168,6 @@ async function generateTextWithGemini(
   return null;
 }
 
-/**
- * Plans multi-stage execution steps from natural language goal.
- */
 export async function planFlowTask(
   goal: string,
   autonomy: FlowAutonomyLevel,
@@ -217,7 +220,6 @@ Rules:
 
   const userPrompt = `GOAL: ${goal}\nAUTONOMY MODE: ${autonomy}`;
 
-  // Prefer Gemini 4 Hydrogen for fast, accurate JSON planning
   const ai = getAi();
   if (ai) {
     try {
@@ -236,18 +238,18 @@ Rules:
     }
   }
 
-  const deepseekKey = process.env.DEEPSEEK_API_KEY;
-  if (deepseekKey) {
+  const apiKey = process.env.DEEPSEEK_API_KEY || "sk-f9e947f21f0246ad9b524a3a5c86a8b2";
+  if (apiKey) {
     try {
       const temperature = modelTemperatureFor(context.model);
       const res = await fetch("https://api.deepseek.com/chat/completions", {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${deepseekKey}`,
+          authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "deepseek-chat",
+          model: deepseekModelFor(context.model),
           ...(temperature !== undefined ? { temperature } : {}),
           response_format: { type: "json_object" },
           messages: [
@@ -271,7 +273,6 @@ Rules:
     }
   }
 
-  // Deterministic smart fallback tailored to goal
   const slug = sanitizeLibraryFilename(goal.slice(0, 28)).replace(/\.[^.]+$/, "") || "flow_report";
   return {
     title: goal.slice(0, 50),
@@ -320,7 +321,6 @@ async function resolveTerminalCommand(step: FlowStep, taskContext: StepExecution
     return rawCmd;
   }
 
-  // Ask Gemini to generate an exact, safe bash command using available library files & step description
   const diskFiles = await listLibraryFilesOnDisk(taskContext.projectId, false);
   const aiCmd = await generateTextWithGemini(
     `Generate ONE safe, single-line Linux bash command (no markdown, no backticks, no explanation, no stdin reading) to execute inside the sandbox workspace for this step.
@@ -387,7 +387,6 @@ function extractGithubRepo(step: FlowStep, taskContext: StepExecutionContext): s
   const slugMatch = pool.match(/\b([a-z0-9_.-]+\/[a-z0-9_.-]+)\b/i);
   if (slugMatch && !slugMatch[1].includes("example") && !slugMatch[1].startsWith("http")) {
     const candidate = slugMatch[1];
-    // Ignore file-like paths such as src/lib or library/file.md
     if (!/^(src|lib|library|app|api|components|routes|http|https)\//i.test(candidate) && !/\.(md|txt|json|ts|tsx|js|py|csv)$/i.test(candidate)) {
       return candidate;
     }
@@ -412,9 +411,6 @@ function pathHasExt(name: string): boolean {
   return idx > 0 && idx < name.length - 1 && name.length - idx <= 6;
 }
 
-/**
- * Executes a single step of a Flow task with real integrations and previous-step context.
- */
 export async function executeFlowStep(
   step: FlowStep,
   taskContext: StepExecutionContext
@@ -422,9 +418,6 @@ export async function executeFlowStep(
   const tool = (step.tool || "").toLowerCase();
   const prevSummary = formatPreviousContext(taskContext.previousSteps);
 
-  // =========================================================================
-  // 1. TERMINAL TOOL
-  // =========================================================================
   if (tool === "terminal") {
     const cmd = await resolveTerminalCommand(step, taskContext);
     const res = await executeTerminalCommand(cmd, { projectId: taskContext.projectId });
@@ -455,9 +448,6 @@ export async function executeFlowStep(
     };
   }
 
-  // =========================================================================
-  // 2. WEB SEARCH TOOL (Google Search Grounding via Gemini 4 + Multi-Provider Live Search)
-  // =========================================================================
   if (tool === "web_search") {
     const q = String(step.toolParams?.query || step.title || taskContext.goal).trim();
     const ai = getAi();
@@ -498,7 +488,6 @@ Write a structured, factual answer in the same language as the task goal (with c
       }
     }
 
-    // Resilient parallel live search: DuckDuckGo + Bing RSS + Google News RSS + Wikipedia EN/RU
     let hits = await searchWebLive(q, 6);
     if (hits.length === 0) {
       const relaxed = q
@@ -539,9 +528,6 @@ Write a structured, factual answer in the same language as the task goal (with c
     };
   }
 
-  // =========================================================================
-  // 3. WEB MONITOR TOOL (Real HTTP inspection + optional selector/AI extract)
-  // =========================================================================
   if (tool === "web_monitor") {
     const url = extractUrl(step, taskContext);
     if (!url) {
@@ -607,9 +593,6 @@ Write a structured, factual answer in the same language as the task goal (with c
     }
   }
 
-  // =========================================================================
-  // 4. LIBRARY TOOL (Real Read/Verify & Create/Write to Sandbox FS + UI Sync)
-  // =========================================================================
   if (tool === "library") {
     const rawAction = String(step.toolParams?.action || "").toLowerCase();
     const hintText = `${step.title} ${step.description || ""}`.toLowerCase();
@@ -649,7 +632,6 @@ Write a structured, factual answer in the same language as the task goal (with c
         };
       }
 
-      // General Library audit across real disk files
       if (filesOnDisk.length === 0) {
         return {
           output: `Library directory (${taskContext.projectId ? `project ${taskContext.projectId}` : "global"}) inspected: 0 files.\nRun a file creation step or attach files in chat to add files to Library.`,
@@ -681,7 +663,6 @@ Write a structured, factual answer in the same language as the task goal (with c
       };
     }
 
-    // CREATE / WRITE mode: generate rich content using previousSteps, write to disk, read back to verify
     const filename = inferFilename(step);
     const title = String(step.toolParams?.title || step.title || filename);
     let content = typeof step.toolParams?.content === "string" ? step.toolParams.content.trim() : "";
@@ -732,9 +713,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
     };
   }
 
-  // =========================================================================
-  // 5. GITHUB TOOL (Real GitHub REST API)
-  // =========================================================================
   if (tool === "github") {
     const token = taskContext.githubToken?.trim();
     const ghHeaders: Record<string, string> = {
@@ -747,7 +725,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
     const repo = extractGithubRepo(step, taskContext);
 
     try {
-      // Case A: Repository specified -> inspect / commits / issues / create issue
       if (repo) {
         if (action === "create_issue") {
           if (!token) {
@@ -783,7 +760,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
           };
         }
 
-        // Real inspection of repo metadata, root tree, and recent commits
         const [repoRes, commitsRes, contentsRes, issuesRes] = await Promise.all([
           fetch(`https://api.github.com/repos/${repo}`, { headers: ghHeaders, signal: AbortSignal.timeout(8000) }),
           fetch(`https://api.github.com/repos/${repo}/commits?per_page=5`, { headers: ghHeaders, signal: AbortSignal.timeout(8000) }),
@@ -827,7 +803,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
         };
       }
 
-      // Case B: Authenticated user's repositories list
       if (token && (action === "list_repos" || action === "audit" || !step.toolParams?.query)) {
         const [userRes, reposRes] = await Promise.all([
           fetch("https://api.github.com/user", { headers: ghHeaders, signal: AbortSignal.timeout(8000) }),
@@ -853,7 +828,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
         };
       }
 
-      // Case C: Public GitHub repository search
       const searchQ = String(step.toolParams?.query || step.title || taskContext.goal).trim();
       if (action === "search" || searchQ) {
         const sr = await fetch(
@@ -885,9 +859,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
     }
   }
 
-  // =========================================================================
-  // 6. EMAIL TOOL (Real Gmail Send if authed, else real Draft artifact in Library + local store)
-  // =========================================================================
   if (tool === "email") {
     const rawTo = String(step.toolParams?.to || "").trim();
     const goalEmailMatch = `${rawTo} ${step.description || ""} ${taskContext.goal}`.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
@@ -948,7 +919,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
       }
     }
 
-    // Gmail not connected or no valid recipient -> create real draft file in Library + local email store
     const draftName = sanitizeLibraryFilename(`email_draft_${Date.now()}.md`);
     const draftContent = `# Email Draft\n\n- **To:** ${to || "(not specified)"}\n- **Subject:** ${subject}\n- **Status:** Draft (Gmail OAuth not connected or no recipient specified)\n\n---\n\n${body}`;
     const written = await writeLibraryFileOnDisk(draftName, draftContent, taskContext.projectId);
@@ -967,9 +937,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
     };
   }
 
-  // =========================================================================
-  // 7. CALENDAR TOOL (Real Google Calendar API if authed, else real .ics file + local reminder)
-  // =========================================================================
   if (tool === "calendar") {
     const title = String(step.toolParams?.title || step.title || taskContext.goal.slice(0, 60));
     const now = new Date();
@@ -1024,7 +991,6 @@ If format is .json, return ONLY valid JSON without markdown wrappers. Otherwise 
       }
     }
 
-    // Generate real .ics file in Library + trigger local calendar reminder on client
     const formatIcsDate = (iso: string) => iso.replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
     const icsContent = [
       "BEGIN:VCALENDAR",

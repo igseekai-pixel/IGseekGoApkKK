@@ -88,10 +88,6 @@ function sanitizeDocId(rawId: string): string {
   return safe || `doc_${Date.now()}`;
 }
 
-/**
- * Clears account-scoped caches in localStorage so switching accounts or logging out
- * never mixes one account's Engine/Flow/Library data into another.
- */
 export function clearLocalUserCaches(): void {
   if (typeof window === "undefined") return;
   try {
@@ -111,13 +107,9 @@ export function clearLocalUserCaches(): void {
     }
     window.dispatchEvent(new CustomEvent("igseek:library-updated"));
   } catch {
-    // ignore storage errors
   }
 }
 
-/**
- * Ensures localStorage caches belong only to the active Firebase UID.
- */
 export function ensureAccountScope(uid: string): void {
   if (typeof window === "undefined" || !uid) return;
   try {
@@ -127,15 +119,12 @@ export function ensureAccountScope(uid: string): void {
     }
     window.localStorage.setItem(CLOUD_UID_KEY, uid);
   } catch {
-    // ignore
   }
 }
 
 export function getActiveCloudUid(): string | null {
   return auth.currentUser?.uid ?? null;
 }
-
-/* ==================== ENGINE PROJECTS SYNC ==================== */
 
 export async function listCloudEngineProjectIds(uid: string): Promise<string[]> {
   if (!uid || !auth.currentUser || uid.startsWith("local_")) return [];
@@ -148,7 +137,6 @@ export async function listCloudEngineProjectIds(uid: string): Promise<string[]> 
     try {
       handleFirestoreError(err, OperationType.LIST, "engine_projects");
     } catch {
-      // logged
     }
     return [];
   }
@@ -181,7 +169,6 @@ export async function loadCloudEngineProject(
     try {
       handleFirestoreError(err, OperationType.GET, `engine_projects/${docId}`);
     } catch {
-      // logged
     }
     return null;
   }
@@ -202,7 +189,6 @@ export async function saveCloudEngineProject(
   const docId = sanitizeDocId(input.id);
   const now = new Date().toISOString();
 
-  // Keep within Firestore 1MB doc limit safely
   const sanitizedFiles: Record<string, string> = {};
   let totalBytes = 0;
   for (const [k, v] of Object.entries(input.files || {})) {
@@ -255,7 +241,6 @@ export async function saveCloudEngineProject(
     try {
       handleFirestoreError(err, OperationType.WRITE, `engine_projects/${docId}`);
     } catch {
-      // logged non-fatal
     }
   }
 }
@@ -266,11 +251,151 @@ export async function deleteCloudEngineProject(uid: string, chatId: string): Pro
   try {
     await deleteDoc(doc(db, "engine_projects", docId));
   } catch {
-    // ignore missing doc or offline
   }
 }
 
-/* ==================== LIBRARY FILES SYNC ==================== */
+export async function deleteCloudAndLocalChat(
+  uid: string,
+  chatId: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!chatId) return { ok: false, error: "Missing chatId" };
+
+  if (typeof window !== "undefined") {
+    try {
+      const guestRaw = window.localStorage.getItem("igseek:guest-store");
+      if (guestRaw) {
+        const guest = JSON.parse(guestRaw);
+        if (Array.isArray(guest?.chats)) {
+          guest.chats = guest.chats.filter((c: any) => c?.id !== chatId);
+        }
+        if (guest?.messages && typeof guest.messages === "object") {
+          delete guest.messages[chatId];
+        }
+        window.localStorage.setItem("igseek:guest-store", JSON.stringify(guest));
+      }
+    } catch {
+    }
+
+    try {
+      const localChatsRaw = window.localStorage.getItem("igseek:local_db:chats");
+      if (localChatsRaw) {
+        const localChats = JSON.parse(localChatsRaw);
+        if (localChats && typeof localChats === "object") {
+          delete localChats[chatId];
+          window.localStorage.setItem("igseek:local_db:chats", JSON.stringify(localChats));
+        }
+      }
+      const localMsgsRaw = window.localStorage.getItem("igseek:local_db:chat_messages");
+      if (localMsgsRaw) {
+        const localMsgs = JSON.parse(localMsgsRaw);
+        if (localMsgs && typeof localMsgs === "object") {
+          for (const [k, v] of Object.entries<any>(localMsgs)) {
+            if (v?.chat_id === chatId || v?.chatId === chatId) {
+              delete localMsgs[k];
+            }
+          }
+          window.localStorage.setItem("igseek:local_db:chat_messages", JSON.stringify(localMsgs));
+        }
+      }
+    } catch {
+    }
+
+    try {
+      window.localStorage.removeItem(`${ENGINE_PROJ_PREFIX}${chatId}`);
+      const idsRaw = window.localStorage.getItem(ENGINE_CHAT_IDS_KEY);
+      if (idsRaw) {
+        const arr = JSON.parse(idsRaw);
+        if (Array.isArray(arr)) {
+          window.localStorage.setItem(
+            ENGINE_CHAT_IDS_KEY,
+            JSON.stringify(arr.filter((x: string) => x !== chatId))
+          );
+        }
+      }
+    } catch {
+    }
+  }
+
+  const activeUid = auth.currentUser?.uid || uid;
+  if (!auth.currentUser || !activeUid || activeUid === "guest" || activeUid.startsWith("local_")) {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("igseek:library-updated"));
+    }
+    return { ok: true };
+  }
+
+  try {
+    const msgRefs: Array<ReturnType<typeof doc>> = [];
+    const seenMsgIds = new Set<string>();
+    for (const ownerField of ["user_id", "userId"] as const) {
+      try {
+        const snap = await getDocs(
+          query(collection(db, "chat_messages"), where(ownerField, "==", activeUid))
+        );
+        for (const d of snap.docs) {
+          if (seenMsgIds.has(d.id)) continue;
+          const data = d.data() as any;
+          if (data?.chat_id === chatId || data?.chatId === chatId) {
+            seenMsgIds.add(d.id);
+            msgRefs.push(d.ref);
+          }
+        }
+      } catch {
+      }
+    }
+    await Promise.all(msgRefs.map((ref) => deleteDoc(ref).catch(() => {})));
+
+    try {
+      const subSnap = await getDocs(collection(db, "chats", chatId, "messages"));
+      await Promise.all(subSnap.docs.map((d) => deleteDoc(d.ref).catch(() => {})));
+    } catch {
+    }
+
+    await deleteCloudEngineProject(activeUid, chatId);
+
+    try {
+      await deleteDoc(doc(db, "chats", chatId));
+    } catch (err: any) {
+      const code = String(err?.code || "");
+      const msg = String(err?.message || "");
+      let stillExists = false;
+      if (code === "not-found" || code === "permission-denied" || msg.includes("permission")) {
+        for (const ownerField of ["user_id", "userId"] as const) {
+          try {
+            const snap = await getDocs(
+              query(collection(db, "chats"), where(ownerField, "==", activeUid))
+            );
+            const hit = snap.docs.find((d) => d.id === chatId);
+            if (hit) {
+              stillExists = true;
+              await deleteDoc(hit.ref);
+              stillExists = false;
+              break;
+            }
+          } catch {
+          }
+        }
+      } else {
+        stillExists = true;
+      }
+
+      if (stillExists) {
+        try {
+          handleFirestoreError(err, OperationType.DELETE, `chats/${chatId}`);
+        } catch {
+        }
+        return { ok: false, error: msg || "Cloud delete failed" };
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("igseek:library-updated"));
+    }
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Failed to delete chat" };
+  }
+}
 
 export function subscribeCloudLibraryFiles(
   uid: string,
@@ -306,7 +431,6 @@ export function subscribeCloudLibraryFiles(
       try {
         handleFirestoreError(err, OperationType.LIST, "library_files");
       } catch {
-        // logged
       }
     }
   );
@@ -321,7 +445,6 @@ export async function upsertCloudLibraryFiles(
     if (!f.id || !f.name) continue;
     const docId = sanitizeDocId(f.id);
     const content = typeof f.content === "string" ? f.content : String(f.content ?? "");
-    // Stay safely within Firestore 1MB per-doc ceiling
     const safeContent = content.length > 850_000 ? content.slice(0, 850_000) : content;
     const payload = cleanFirestorePayload({
       userId: uid,
@@ -342,7 +465,6 @@ export async function upsertCloudLibraryFiles(
       try {
         handleFirestoreError(err, OperationType.WRITE, `library_files/${docId}`);
       } catch {
-        // logged
       }
     }
   }
@@ -364,7 +486,6 @@ export async function renameCloudLibraryFile(
     try {
       handleFirestoreError(err, OperationType.UPDATE, `library_files/${docId}`);
     } catch {
-      // logged
     }
   }
 }
@@ -378,12 +499,9 @@ export async function deleteCloudLibraryFile(uid: string, fileId: string): Promi
     try {
       handleFirestoreError(err, OperationType.DELETE, `library_files/${docId}`);
     } catch {
-      // logged
     }
   }
 }
-
-/* ==================== CHAT MEDIA & ARTIFACTS FOR LIBRARY ==================== */
 
 export async function fetchCloudChatMessagesForLibrary(
   uid: string
@@ -415,7 +533,6 @@ export async function fetchCloudChatMessagesForLibrary(
     try {
       handleFirestoreError(err, OperationType.LIST, "chat_messages");
     } catch {
-      // logged
     }
     return [];
   }
@@ -452,7 +569,6 @@ export async function renameCloudChatMediaItem(
     try {
       handleFirestoreError(err, OperationType.UPDATE, `chat_messages/${msgId}`);
     } catch {
-      // logged
     }
     return false;
   }
@@ -489,7 +605,6 @@ export async function deleteCloudChatMediaItem(
     try {
       handleFirestoreError(err, OperationType.UPDATE, `chat_messages/${msgId}`);
     } catch {
-      // logged
     }
     return false;
   }

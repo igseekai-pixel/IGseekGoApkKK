@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const DAILY_PHOTO_LIMIT = 8;
-export const PHOTO_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const PHOTO_RESET_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export type ServerPhotoQuotaState = {
   used: number;

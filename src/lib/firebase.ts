@@ -37,7 +37,6 @@ import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
-/* CRITICAL: The app will break without specifying firestoreDatabaseId */
 export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId || "(default)");
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
@@ -99,7 +98,6 @@ export async function testConnection() {
   }
 }
 
-// Run connection test on initialization in browser
 if (typeof window !== 'undefined') {
   void testConnection();
 }

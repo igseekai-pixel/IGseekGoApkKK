@@ -3,10 +3,6 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Eye, Maximize2, Pencil, Save, X } from "lucide-react";
 import { useT } from "@/lib/i18n";
 
-/**
- * Strips embedded base64 image markdown and hidden attachment payload tags
- * so line counting reflects actual visible text instead of megabytes of base64.
- */
 export function stripAttachmentsForLineCount(text: string | undefined | null): string {
   if (!text) return "";
   return text
@@ -16,10 +12,6 @@ export function stripAttachmentsForLineCount(text: string | undefined | null): s
     .trim();
 }
 
-/**
- * Counts how many lines a text occupies, accounting for both explicit newlines
- * and long lines that visually wrap inside chat bubbles / composers.
- */
 export function countTextLines(
   text: string | undefined | null,
   charsPerLine = 65
@@ -34,9 +26,6 @@ export function countTextLines(
   return Math.max(rawLines.length, visualLines);
 }
 
-/**
- * Returns true strictly when text exceeds maxLines (default 5 lines, explicit or visually wrapped).
- */
 export function isLongTextOverLimit(
   text: string | undefined | null,
   maxLines = 5,
@@ -149,7 +138,6 @@ export function LongTextModal({
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
     } catch {
-      // ignore clipboard errors
     }
   };
 
@@ -162,7 +150,6 @@ export function LongTextModal({
         className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-zinc-200 dark:border-white/15 bg-white dark:bg-[#141416] text-zinc-900 dark:text-zinc-100 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 dark:border-white/10 px-4 sm:px-6 py-3.5 bg-zinc-50/80 dark:bg-white/[0.02]">
           <div className="min-w-0 flex-1">
             <h3 className="text-sm sm:text-base font-bold truncate">{title}</h3>
@@ -216,7 +203,6 @@ export function LongTextModal({
           </div>
         </div>
 
-        {/* Body */}
         <div className="flex-1 min-h-0 overflow-hidden p-4 sm:p-6 flex flex-col">
           {mode === "view" || readOnly ? (
             <div
@@ -239,7 +225,6 @@ export function LongTextModal({
           )}
         </div>
 
-        {/* Footer */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 dark:border-white/10 px-4 sm:px-6 py-3.5 bg-zinc-50/80 dark:bg-white/[0.02]">
           <div className="flex items-center gap-2">
             <button

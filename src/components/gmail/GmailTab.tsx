@@ -53,21 +53,17 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
   const [selectedFolder, setSelectedFolder] = useState<'INBOX' | 'SENT' | 'TRASH'>('INBOX');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Selected email detail view
   const [viewingEmail, setViewingEmail] = useState<GmailMessageSummary | null>(null);
 
-  // Compose email modal
   const [isComposing, setIsComposing] = useState<boolean>(false);
   const [to, setTo] = useState<string>('');
   const [subject, setSubject] = useState<string>('');
   const [body, setBody] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
 
-  // Explicit confirmation modals (MANDATORY for Workspace destructive/mutating actions)
   const [confirmSending, setConfirmSending] = useState<boolean>(false);
   const [trashingEmail, setTrashingEmail] = useState<GmailMessageSummary | null>(null);
 
-  // Sync token state
   useEffect(() => {
     const handleAuthChange = (e: CustomEvent) => {
       setIsConnected(e.detail?.connected ?? false);
@@ -76,7 +72,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
     return () => window.removeEventListener('igseek:gmail-auth-changed' as any, handleAuthChange);
   }, []);
 
-  // Listen to local email updates
   useEffect(() => {
     const handleLocalUpdate = () => {
       if (!isConnected) {
@@ -87,7 +82,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
     return () => window.removeEventListener('igseek:local-emails-updated', handleLocalUpdate);
   }, [isConnected]);
 
-  // Load emails
   const loadData = async () => {
     setLoading(true);
     setError(null);
@@ -211,7 +205,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-4xl mx-auto pb-12">
-      {/* Header Banner */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl border border-border bg-surface/70 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand/15 text-brand border border-brand/20">
@@ -278,9 +271,7 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
         </div>
       )}
 
-      {/* Main Mail Controls */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        {/* Compose Button */}
         <button
           onClick={() => setIsComposing(true)}
           className="glass-button-brand inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold text-white"
@@ -289,7 +280,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
           <span>{t('Compose')}</span>
         </button>
 
-        {/* Folder Selectors */}
         <div className="flex items-center gap-1.5 overflow-x-auto">
           {[
             { id: 'INBOX', label: t('Inbox'), icon: Inbox },
@@ -315,7 +305,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
           })}
         </div>
 
-        {/* Search Input */}
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
@@ -328,7 +317,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
         </div>
       </div>
 
-      {/* Email List */}
       {loading ? (
         <div className="flex flex-col gap-2 py-8">
           {[1, 2, 3, 4].map((i) => (
@@ -386,7 +374,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
         </div>
       )}
 
-      {/* View Email Detail Modal */}
       <AnimatePresence>
         {viewingEmail && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">
@@ -415,7 +402,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
                 {viewingEmail.body || viewingEmail.snippet}
               </div>
 
-              {/* Email Footer Actions */}
               <div className="flex items-center justify-between gap-3 pt-3 border-t border-border">
                 <div className="flex items-center gap-2">
                   {onAskAiAboutEmail && (
@@ -460,7 +446,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
         )}
       </AnimatePresence>
 
-      {/* Compose Email Modal */}
       <AnimatePresence>
         {isComposing && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">
@@ -541,7 +526,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
         )}
       </AnimatePresence>
 
-      {/* Confirm Send Email Modal (MANDATORY per Workspace guidelines) */}
       <AnimatePresence>
         {confirmSending && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">
@@ -586,7 +570,6 @@ export function GmailTab({ onAskAiAboutEmail, onNavigateToChat }: GmailTabProps)
         )}
       </AnimatePresence>
 
-      {/* Confirm Trash Email Modal (MANDATORY per Workspace guidelines) */}
       <AnimatePresence>
         {trashingEmail && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-md">

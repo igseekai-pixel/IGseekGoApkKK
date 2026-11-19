@@ -48,6 +48,7 @@ import {
   Cpu,
   Layers3,
   Square,
+  BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -67,6 +68,8 @@ import {
 import { getCachedGmailToken, saveLocalEmail } from "@/lib/gmail";
 import { getCachedCalendarToken, saveLocalReminder } from "@/lib/google-calendar";
 import { readFlowLibraryFiles, upsertFlowLibraryFiles } from "@/lib/flow-library-store";
+import { addFileToUnifiedLibrary, fetchUnifiedLibraryItems, toBase64DataUrlFromItem } from "@/lib/unified-library";
+import { LibraryPickerModal } from "@/components/LibraryPickerModal";
 import {
   LongTextButton,
   LongTextModal,
@@ -215,10 +218,6 @@ const INITIAL_INTEGRATIONS: FlowIntegration[] = [
   },
 ];
 
-/**
- * Strips undefined values recursively so Firestore updateDoc / addDoc never throws:
- * "Function updateDoc() called with invalid data. Unsupported field value: undefined"
- */
 function cleanForFirestore(obj: any): any {
   if (obj === undefined) return null;
   if (obj === null || typeof obj !== "object") return obj;
@@ -246,7 +245,7 @@ export function FlowView({
   onOpenLibrary,
   onToggleSidebar,
   projects = [],
-  chats: _chats = [],
+  chats = [],
   onCreateProject,
   agent = "universal",
   model = "instinct",
@@ -311,6 +310,7 @@ export function FlowView({
   }, []);
   const [showIntegrationsModal, setShowIntegrationsModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   const [longTextTarget, setLongTextTarget] = useState<
     | { kind: "composer" }
     | { kind: "goal"; taskId: string }
@@ -320,7 +320,6 @@ export function FlowView({
     | null
   >(null);
 
-  // Randomized scenario chips state
   const [scenariosList, setScenariosList] = useState<FlowScenarioChip[]>(() => {
     return [...ALL_FLOW_SCENARIOS].sort(() => Math.random() - 0.5);
   });
@@ -330,7 +329,6 @@ export function FlowView({
     toast.success(t("Scenarios shuffled!"));
   };
 
-  // GitHub integration & OAuth state
   const [githubUser, setGithubUser] = useState<any>(() => {
     try {
       const u = localStorage.getItem("igseek:github_user");
@@ -349,7 +347,6 @@ export function FlowView({
   });
   const [showConfig, setShowConfig] = useState(false);
 
-  // Integrations state
   const [integrations, setIntegrations] = useState<FlowIntegration[]>(() => {
     try {
       const stored = localStorage.getItem("igseek:flow_integrations");
@@ -359,7 +356,6 @@ export function FlowView({
         if (filtered.length > 0) return filtered;
       }
     } catch {
-      // ignore
     }
     return INITIAL_INTEGRATIONS;
   });
@@ -369,11 +365,9 @@ export function FlowView({
     try {
       localStorage.setItem("igseek:flow_integrations", JSON.stringify(list));
     } catch {
-      // ignore
     }
   };
 
-  // Listen for real GitHub OAuth popup message
   useEffect(() => {
     const handleMessage = async (e: MessageEvent) => {
       if (e.data?.type === "GITHUB_OAUTH_SUCCESS") {
@@ -399,7 +393,6 @@ export function FlowView({
     return () => window.removeEventListener("message", handleMessage);
   }, [integrations, lang]);
 
-  // Verify stored token on load
   useEffect(() => {
     if (githubToken && !githubUser) {
       void verifyAndSaveToken(githubToken);
@@ -491,14 +484,12 @@ export function FlowView({
     toast.success(t("GitHub account disconnected"));
   };
 
-  // Helper to merge incoming tasks while preserving local running status to prevent status flicker
   const mergeTasksPreservingRunning = (incoming: FlowTask[]): FlowTask[] => {
     return incoming.map((inc) => {
       const local = tasksRef.current.find((c) => c.id === inc.id);
       if (!local) return inc;
       const isLocalActive = local.status === "running" || local.steps.some((s) => s.status === "running");
       if (isLocalActive) {
-        // Merge finished steps from incoming if available, but keep running step local
         const mergedSteps = inc.steps.map((incStep) => {
           const localStep = local.steps.find((ls) => ls.id === incStep.id);
           if (localStep && localStep.status === "running") {
@@ -525,11 +516,9 @@ export function FlowView({
     try {
       localStorage.setItem(FLOW_STORAGE_KEY, JSON.stringify(next));
     } catch {
-      // ignore
     }
   };
 
-  // Load Tasks (Firebase if real Firebase user, LocalStorage for guest)
   useEffect(() => {
     if (firestoreUserId) {
       isInitialLoadRef.current = true;
@@ -591,7 +580,6 @@ export function FlowView({
         }
       }
     } catch {
-      // ignore
     }
   };
 
@@ -605,7 +593,7 @@ export function FlowView({
         const parsed = JSON.parse(raw);
         token = parsed?.access_token || parsed?.token || "";
       }
-    } catch { /* ignore */ }
+    } catch {  }
     return {
       "content-type": "application/json",
       "x-guest-mode": firestoreUserId ? "false" : "true",
@@ -617,7 +605,6 @@ export function FlowView({
     const files: Array<{ name: string; type?: string; dataUrl?: string; content?: string }> = [];
     const seen = new Set<string>();
 
-    // 1. Files previously created by Flow
     for (const f of readFlowLibraryFiles()) {
       if (targetProjectId && f.projectId !== targetProjectId) continue;
       if (!targetProjectId && f.projectId) continue;
@@ -626,7 +613,6 @@ export function FlowView({
       files.push({ name: f.name, type: f.type, content: f.content });
     }
 
-    // 2. Files/Artifacts from guest-store chats (filtered by project if active)
     try {
       const raw = localStorage.getItem("igseek:guest-store");
       if (raw) {
@@ -666,7 +652,7 @@ export function FlowView({
           }
         }
       }
-    } catch { /* ignore */ }
+    } catch {  }
 
     return files;
   };
@@ -674,13 +660,26 @@ export function FlowView({
   const syncLibraryFiles = async (targetProjectId?: string | null, signal?: AbortSignal) => {
     try {
       const proj = targetProjectId !== undefined ? targetProjectId : selectedProjectId;
-      const files = collectLocalLibraryFiles(proj);
+      const localFiles = collectLocalLibraryFiles(proj);
+      const unifiedItems = await fetchUnifiedLibraryItems({ userId, chats, projects }).catch(() => []);
+      const seenNames = new Set(localFiles.map((f) => f.name.toLowerCase()));
+      const files = [...localFiles];
+      for (const ui of unifiedItems) {
+        if (!ui.name || seenNames.has(ui.name.toLowerCase())) continue;
+        seenNames.add(ui.name.toLowerCase());
+        files.push({
+          name: ui.name,
+          type: ui.type,
+          ...(ui.content !== undefined ? { content: ui.content } : {}),
+          ...(ui.dataUrl ? { dataUrl: toBase64DataUrlFromItem(ui) || ui.dataUrl } : {}),
+        });
+      }
       if (files.length > 0) {
         await fetch("/api/flow", {
           method: "POST",
           signal,
           headers: getFlowHeaders(),
-          body: JSON.stringify({ action: "sync_library", projectId: proj || null, files }),
+          body: JSON.stringify({ action: "sync_library", projectId: proj || null, files: files.slice(0, 40) }),
         });
       }
       return files;
@@ -709,7 +708,6 @@ export function FlowView({
     setIsPlanning(false);
   };
 
-  // 1. Plan new Flow Task
   const handleCreatePlan = async (customGoal?: string) => {
     const goal = (customGoal || goalInput).trim();
     if (!goal || isPlanning) return;
@@ -842,7 +840,6 @@ export function FlowView({
     }
   };
 
-  // Helper for deduplicating consecutive identical logs (e.g. repeated [ACTION] calls)
   const appendDeduplicatedLog = (
     existingLogs: FlowLogEntry[],
     newLog: Omit<FlowLogEntry, "id">
@@ -867,7 +864,6 @@ export function FlowView({
     return [...existingLogs, { ...newLog, id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }];
   };
 
-  // Core step execution logic shared by single-step and run-all
   const executeStepCore = async (taskId: string, stepId: string): Promise<boolean> => {
     const currentTask = tasksRef.current.find((t) => t.id === taskId);
     if (!currentTask) return false;
@@ -878,7 +874,6 @@ export function FlowView({
     const step = currentTask.steps[stepIndex];
     const activeProjectId = currentTask.projectId ?? selectedProjectId ?? null;
 
-    // Ensure Library files are synced to disk before executing any step
     const syncedFiles = await syncLibraryFiles(activeProjectId);
 
     const updatedSteps = [...currentTask.steps];
@@ -900,7 +895,6 @@ export function FlowView({
     };
     updateTaskInState(taskUpdated);
 
-    // Timeout guard: 45 seconds per step so multi-call GitHub / Google Search grounding completes cleanly
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const timeoutId = setTimeout(() => {
@@ -955,7 +949,6 @@ export function FlowView({
       }
       const stepResult = resData.stepResult || { output: resData.output || t("Completed"), error: resData.error };
 
-      // Persist created/modified files from Flow into shared Library store so LibraryView sees them immediately
       const createdArtifacts: Array<{ name: string; type: string; content: string; projectId?: string | null }> = [];
       if (Array.isArray(stepResult.createdFiles)) {
         for (const f of stepResult.createdFiles) {
@@ -989,7 +982,6 @@ export function FlowView({
         );
       }
 
-      // Persist local email draft or calendar reminder if not sent/created externally
       if (stepResult.emailDraft && !stepResult.emailDraft.sent) {
         saveLocalEmail({
           to: stepResult.emailDraft.to || "",
@@ -1034,7 +1026,6 @@ export function FlowView({
         message: resultMsg,
       });
 
-      // Deduplicate task outputArtifacts by name
       const existingArtifacts = latestTask.outputArtifacts || [];
       const mergedArtifactsMap = new Map(existingArtifacts.map((a) => [a.name, a]));
       for (const art of createdArtifacts) {
@@ -1090,7 +1081,6 @@ export function FlowView({
     }
   };
 
-  // Stop execution cleanly
   const handleStopExecution = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -1118,7 +1108,6 @@ export function FlowView({
     toast.info(t("Execution stopped"));
   };
 
-  // Execute Step individually
   const handleExecuteStep = async (stepId: string) => {
     if (!selectedTaskId || isRunningStep) return;
     setIsRunningStep(true);
@@ -1221,7 +1210,6 @@ export function FlowView({
 
   return (
     <div className="w-full flex flex-col min-h-screen">
-      {/* GitHub Integration Modal */}
       {showIntegrationsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
           <div className="w-full max-w-lg rounded-[24px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416] p-6 shadow-2xl space-y-5">
@@ -1417,7 +1405,6 @@ export function FlowView({
         );
       })()}
 
-      {/* Engine Studio Studio Header */}
       <header className="shrink-0 border-b border-zinc-200 dark:border-white/10 bg-white/60 dark:bg-[#121214]/80 backdrop-blur-md px-4 sm:px-8 py-3 flex items-center justify-between gap-4 z-20">
         <div className="flex items-center gap-3">
           {onToggleSidebar && (
@@ -1438,9 +1425,7 @@ export function FlowView({
           </div>
         </div>
 
-        {/* Right Header Controls */}
         <div className="flex items-center gap-2">
-          {/* Autonomy Selector */}
           <div className="hidden sm:flex items-center gap-1 rounded-full border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 p-1">
             {(["assist", "semi-auto", "autopilot"] as FlowAutonomyLevel[]).map((lvl) => (
               <button
@@ -1487,12 +1472,9 @@ export function FlowView({
         </div>
       </header>
 
-      {/* Main Studio Viewport */}
       <div className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-8 py-6 space-y-8">
-        {/* ================= VIEW 1: HERO CENTERED ENGINE COMPOSER (WHEN NO TASK SELECTED OR CREATE NEW) ================= */}
         {!selectedTask ? (
           <div className="space-y-8 max-w-3xl mx-auto pt-4 sm:pt-8">
-            {/* Engine Studio Header Title */}
             <div className="flex flex-col items-center text-center space-y-3">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-black/10 dark:border-white/10 bg-zinc-100 dark:bg-white/5 px-4 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-800 dark:text-zinc-200">
                 <Cpu className="h-3.5 w-3.5 text-black dark:text-[var(--brand)]" />
@@ -1506,7 +1488,6 @@ export function FlowView({
               </p>
             </div>
 
-            {/* ENGINE STYLE CENTERED COMPOSER CARD */}
             <div className="w-full">
               <form
                 onSubmit={(e) => {
@@ -1515,7 +1496,6 @@ export function FlowView({
                 }}
                 className="relative flex flex-col gap-3 rounded-[24px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/95 p-4 shadow-xl backdrop-blur-xl focus-within:border-zinc-400 dark:focus-within:border-white/20 transition-all"
               >
-                {/* Project selector (matching Engine) */}
                 <div className="flex items-center justify-between pb-1">
                   <div className="relative">
                     <button
@@ -1696,37 +1676,11 @@ export function FlowView({
                           const file = (e.target as HTMLInputElement).files?.[0];
                           if (!file) return;
                           try {
-                            const isText =
-                              file.type.startsWith("text/") ||
-                              /\.(md|txt|json|csv|ts|tsx|js|jsx|py|html|css|yml|yaml|xml|sql|sh)$/i.test(file.name);
-                            if (isText && file.size <= 512 * 1024) {
-                              const content = await file.text();
-                              upsertFlowLibraryFiles([
-                                {
-                                  name: file.name,
-                                  type: file.name.endsWith(".json") || file.name.endsWith(".csv") ? "data" : "document",
-                                  content,
-                                  projectId: selectedProjectId || null,
-                                  taskTitle: t("Flow attachment"),
-                                },
-                              ]);
-                              await syncLibraryFiles(selectedProjectId);
-                            } else {
-                              const dataUrl = await new Promise<string>((resolve) => {
-                                const reader = new FileReader();
-                                reader.onload = () => resolve(String(reader.result || ""));
-                                reader.readAsDataURL(file);
-                              });
-                              await fetch("/api/flow", {
-                                method: "POST",
-                                headers: getFlowHeaders(),
-                                body: JSON.stringify({
-                                  action: "sync_library",
-                                  projectId: selectedProjectId || null,
-                                  files: [{ name: file.name, dataUrl }],
-                                }),
-                              });
-                            }
+                            await addFileToUnifiedLibrary(file, {
+                              projectId: selectedProjectId || null,
+                              taskTitle: t("Flow attachment"),
+                            });
+                            await syncLibraryFiles(selectedProjectId);
                             setGoalInput((prev) => `${prev ? `${prev}\n` : ""}[${t("File in Library")}: ${file.name}]`);
                             toast.success(`${t("File added to Library:")} ${file.name}`);
                           } catch {
@@ -1739,6 +1693,16 @@ export function FlowView({
                       title={t("Attach file")}
                     >
                       <Paperclip className="h-4 w-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setLibraryPickerOpen(true)}
+                      className="flex h-9 px-3 items-center gap-1.5 rounded-full border border-zinc-200 dark:border-white/10 bg-zinc-100 dark:bg-white/5 text-xs font-medium text-zinc-700 dark:text-zinc-200 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200/70 dark:hover:bg-white/10 transition-colors cursor-pointer"
+                      title={t("Select from Library")}
+                    >
+                      <BookOpen className="h-3.5 w-3.5 text-black dark:text-[var(--brand)]" />
+                      <span className="hidden sm:inline">{t("Library")}</span>
                     </button>
 
                     <button
@@ -1829,7 +1793,6 @@ export function FlowView({
               </form>
             </div>
 
-            {/* RANDOMIZED ENGINE PROMPT CHIPS */}
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
@@ -1872,7 +1835,6 @@ export function FlowView({
               </div>
             </div>
 
-            {/* PROCESS HISTORY LIST (IF ANY) */}
             {tasks.length > 0 && (
               <div className="pt-4 border-t border-zinc-200 dark:border-white/10 space-y-3">
                 <div className="flex items-center justify-between px-1">
@@ -1929,9 +1891,7 @@ export function FlowView({
             )}
           </div>
         ) : (
-          /* ================= VIEW 2: ENGINE STYLE EXECUTION PIPELINE VIEW ================= */
           <div className="space-y-6">
-            {/* Top Task Engine Control Header */}
             <div className="rounded-[24px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/90 p-5 sm:p-6 shadow-xl backdrop-blur-xl space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-100 dark:border-white/5 pb-4">
                 <div className="min-w-0 flex-1">
@@ -1994,7 +1954,6 @@ export function FlowView({
                   )}
                 </div>
 
-                {/* Actions */}
                 <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
                   {isRunningStep ? (
                     <button
@@ -2041,7 +2000,6 @@ export function FlowView({
                 </div>
               </div>
 
-              {/* Progress Summary Bar */}
               <div className="flex items-center justify-between text-xs font-mono text-muted-foreground pt-1">
                 <span>
                   {t("Completed")} {selectedTask.steps.filter((s) => s.status === "completed").length} / {selectedTask.steps.length} {t("steps")}
@@ -2069,9 +2027,7 @@ export function FlowView({
               </div>
             </div>
 
-            {/* ENGINE STUDIO TWIN PANEL: STEPS PIPELINE & LIVE AGENT TERMINAL */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left Column: Sequential Step Pipeline Nodes (7 cols) */}
               <div className="lg:col-span-7 space-y-4">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -2099,10 +2055,8 @@ export function FlowView({
                             : "border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/90 hover:border-zinc-300 dark:hover:border-white/20"
                         }`}
                       >
-                        {/* 1. Header row: Number circle + Title + Tool + Action Button */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
-                            {/* Step Status Node */}
                             <div
                               className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-bold transition-all ${
                                 isComplete
@@ -2117,7 +2071,6 @@ export function FlowView({
                               {isComplete ? <Check className="h-4 w-4" /> : idx + 1}
                             </div>
 
-                            {/* Title & Badges */}
                             <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
                               <h3 className="text-sm sm:text-base font-bold text-foreground leading-snug break-words">
                                 {step.title}
@@ -2133,7 +2086,6 @@ export function FlowView({
                             </div>
                           </div>
 
-                          {/* Execute Step Button */}
                           <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                             <button
                               onClick={() => handleExecuteStep(step.id)}
@@ -2173,7 +2125,6 @@ export function FlowView({
                           </div>
                         </div>
 
-                        {/* 2. Full-Width Description */}
                         {step.description && (
                           <div className="mt-2.5 sm:pl-11 text-xs sm:text-[13px] text-zinc-600 dark:text-zinc-300 leading-relaxed break-words">
                             <p className="whitespace-pre-wrap break-words">{step.description}</p>
@@ -2195,7 +2146,6 @@ export function FlowView({
                           </div>
                         )}
 
-                        {/* 3. Live Execution Ticker when Running */}
                         {isRunning && (
                           <div className="mt-3 sm:ml-11 flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs font-mono text-amber-600 dark:text-amber-400">
                             <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
@@ -2209,7 +2159,6 @@ export function FlowView({
                           </div>
                         )}
 
-                        {/* 4. Output / Result Block */}
                         {step.output && (
                           <div className="mt-3 sm:ml-11">
                             <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
@@ -2237,7 +2186,6 @@ export function FlowView({
                           </div>
                         )}
 
-                        {/* 5. Error Block */}
                         {step.error && (
                           <div className="mt-3 sm:ml-11 text-[11px] text-red-500 dark:text-red-400 font-mono bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl break-words [overflow-wrap:anywhere]">
                             {t("Error:")} {step.error}
@@ -2249,9 +2197,7 @@ export function FlowView({
                 </div>
               </div>
 
-              {/* Right Column: Engine Agent Terminal Console & Artifacts (5 cols) */}
               <div className="lg:col-span-5 space-y-4">
-                {/* Real-time Execution Stream Console */}
                 <div className="rounded-[20px] border border-zinc-200 dark:border-white/10 bg-[#0c0c0e] p-4 font-mono shadow-2xl space-y-3">
                   <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
                     <div className="flex items-center gap-2">
@@ -2304,7 +2250,6 @@ export function FlowView({
                   </div>
                 </div>
 
-                {/* Created Artifacts & Library Files */}
                 {selectedTask.outputArtifacts && selectedTask.outputArtifacts.length > 0 && (
                   <div className="rounded-[20px] border border-zinc-200 dark:border-white/10 bg-white dark:bg-[#141416]/90 p-4 shadow-xl space-y-3">
                     <div className="flex items-center justify-between border-b border-zinc-100 dark:border-white/5 pb-2.5">
@@ -2391,6 +2336,37 @@ export function FlowView({
           </div>
         )}
       </div>
+
+      <LibraryPickerModal
+        open={libraryPickerOpen}
+        onClose={() => setLibraryPickerOpen(false)}
+        userId={userId}
+        chats={chats}
+        projects={projects}
+        t={t}
+        actionLabel={t("Attach")}
+        onSelect={async (item) => {
+          try {
+            await fetch("/api/flow", {
+              method: "POST",
+              headers: getFlowHeaders(),
+              body: JSON.stringify({
+                action: "sync_library",
+                projectId: selectedProjectId || null,
+                files: [
+                  {
+                    name: item.name,
+                    ...(item.content !== undefined ? { content: item.content } : { dataUrl: item.resolvedDataUrl || item.dataUrl }),
+                  },
+                ],
+              }),
+            });
+          } catch {
+          }
+          setGoalInput((prev) => `${prev ? `${prev}\n` : ""}[${t("File in Library")}: ${item.name}]`);
+          toast.success(`${t("Attached from Library:")} ${item.name}`);
+        }}
+      />
     </div>
   );
 }

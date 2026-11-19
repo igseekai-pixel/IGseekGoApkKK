@@ -1,22 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 export interface UseAutoResizeTextareaOptions {
-  /**
-   * Maximum height as a fraction of visualViewport/window height (e.g. 0.55 for fixed-bottom composers
-   * so Send buttons never get pushed off-screen on huge pastes).
-   * Pass null or undefined to allow full uncapped vertical expansion.
-   */
   maxViewportFraction?: number | null;
-  /** Minimum pixel cap when maxViewportFraction is active. Defaults to 240. */
   minCapPx?: number;
-  /** Extra dependencies that affect mount state or surrounding layout (e.g. tab, messagesCount). */
   deps?: ReadonlyArray<unknown>;
 }
 
-/**
- * Automatically adjusts a <textarea>'s height to fit all of its content cleanly
- * across typing, pasting, programmatic updates, clearing, window/keyboard resize, and width changes.
- */
 export function useAutoResizeTextarea(
   ref: RefObject<HTMLTextAreaElement | null>,
   value: string,
@@ -29,7 +18,6 @@ export function useAutoResizeTextarea(
     const el = ref.current;
     if (!el) return;
 
-    // Preserve nearest scrollable ancestor scrollTop so height reset does not jump scroll position
     const scrollParent = el.closest<HTMLElement>(".overflow-y-auto, [data-scroll-container]");
     const prevScrollTop = scrollParent ? scrollParent.scrollTop : 0;
 
@@ -55,7 +43,6 @@ export function useAutoResizeTextarea(
 
   useLayoutEffect(() => {
     syncHeight();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncHeight, value, ...deps]);
 
   useEffect(() => {
@@ -90,7 +77,6 @@ export function useAutoResizeTextarea(
       window.removeEventListener("resize", onViewportResize);
       window.visualViewport?.removeEventListener("resize", onViewportResize);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref, syncHeight, ...deps]);
 
   return syncHeight;
